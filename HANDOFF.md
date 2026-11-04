@@ -26,7 +26,25 @@ do it after the scoring robustness below, on realistic scenarios.
 3. Then the user's sweep: SNR, tolerance settings (n_sigma, sys values), DEM error (bias/noise via
    region.ground_elev_m or a perturbed DEM), on realistic scenarios plus `--clean`.
 
-### Open decisions for the user (implemented as defaults, NOT yet approved)
+### Two design variants to keep (user, end of session 3)
+The user accepted the two changes below as the **current defaults** but wants the **original design kept**
+so both can be compared later and the advantages of each used. Don't delete either path; any comparison
+(ablation, sweep, real data) should report both variants side by side.
+
+| | Original design (milestones 4–5) | Current default (session 3, robustness) |
+|---|---|---|
+| Unmatched events | every event must match a track (`cascade.max_unmatched_events: 0`) | up to 1 event may stay unmatched (`: 1`), lexicographic ranking (explain more events first, then score) |
+| Silence | hard: reject a cell if any unexplained class-compatible pass is within the slant threshold (`cascade.silence_audibility: hard`) | probabilistic: reject only if P(audible) ≥ 0.99, else add −ln(1−P) nats to the score (`: probabilistic`) |
+| Strengths | strong pruning, few survivors, fast scoring; decoys are decisive; matches CLAUDE.md steps 5–6 as written | survives spurious events (cars, birds, harmonics), aircraft without ADS-B, and quiet aircraft inside the threshold |
+| Weaknesses | one spurious event or one quiet nearby aircraft eliminates the true cell (zero survivors in the realistic ablation) | many more survivors (single-event loci), slower scoring (276 hypotheses, 23 s); silence nearly toothless beyond ~0.2× threshold |
+
+Run the original with: `cascade: {max_unmatched_events: 0, silence_audibility: hard}` (the decoy tests in
+tests/test_cascade.py use exactly this, as `STRICT`). Possible combination to test later: strict first,
+falling back to the robust variant only when strict leaves zero survivors (or when an event has no
+class-compatible track within reach). CLAUDE.md methodology steps 5–6 still describe the original; update
+them only once the comparison settles it.
+
+### Other open decisions for the user (implemented as defaults, not yet approved)
 - `cascade.max_unmatched_events: 1`: an event may stay unmatched (car, bird, aircraft without ADS-B).
   Ranking is **lexicographic**: hypotheses explaining more events always rank above those explaining
   fewer; then by score. (A fixed per-point penalty in σ units failed: with small ridge σ even the true
