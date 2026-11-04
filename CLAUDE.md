@@ -5,6 +5,8 @@ Estimate where an audio recording was made using the aircraft audible in its bac
 
 Outputs: a ranked list of candidate locations, a score raster over the search region, and diagnostics, all viewable in QGIS. A companion analysis assesses which common audio processing does and doesn't defeat the method.
 
+The repo serves two modes (see Operating modes): **fully automated** location estimation, which is the current focus and the basis of every validation claim, and later **human-in-the-loop** guidance, where an analyst uses the same scripts to narrow candidates faster. The two will be compared on real recordings to find where a human adds the most accuracy per unit of effort.
+
 ## Core idea
 A single flyover constrains the mic heavily:
 - **t0** (closest-approach time, corrected for sound travel time) ties the mic to where the aircraft was at that moment.
@@ -52,6 +54,12 @@ General model (any track geometry, used for scoring): for candidate mic position
 ### Search modes
 - **Regional:** bounded region, known or windowed time. Search regions are polygons in `inputs/search_regions.gpkg` (layer `search_regions`, EPSG:4326, field `name`), selected by name in config.yaml.
 - **US-wide:** a single clip of known time. The cascade (steps 4–6) must prune with vectorized and spatially indexed operations (e.g. only cells within audible range of tracks active at the event times) before step 7. Never run full curve modeling on the full grid. Always report cell counts surviving each stage.
+
+### Operating modes
+- **Automated (current focus).** `cli.py locate` runs end to end with no human input. All validation (synthetic and the real benchmark) is fully automated: no manual event windows (`detect.manual_windows` empty), no hand-tuned per-clip parameters, nothing chosen after looking at the truth. run.json records `human_in_loop: false` and any manual inputs, so a run that used one is never reported as automated.
+- **Human-in-the-loop (later, milestone 9).** An analyst reviews events, tracks and candidates and records decisions (e.g. reject an event, fix a harmonic, exclude a track or an area, reject a candidate) that the same pipeline consumes as data. Not built yet; designed and tested after the automated pipeline is validated on real recordings.
+- **Design constraints now, so HITL can be added later without rework:** keep stages separable with explicit inputs and outputs (pure functions in doppler/*); no hidden state between stages; every threshold in config.yaml; outputs explain themselves (per-stage counts, assigned tracks, tolerances, and why cells fail where cheap). Don't build HITL tooling yet: no decision files, case workspaces, review servers, or analyst overrides.
+- Read-only diagnostics (viewer.html comparison panels, plots, QGIS layers) are part of automated validation: they help a person check results but never feed back into a run.
 
 ## Repo layout
 ```
@@ -114,6 +122,8 @@ Optimize for storage wherever it costs no functionality or accuracy; when there 
 ## Validation
 - **Synthetic:** hidden mic, tracks of both classes, two events at a chosen offset, plus decoy tracks that must trigger the silence filter. The true cell must survive every cascade stage and rank 1st after scoring. Also report sensitivity to SNR, tolerance settings, and DEM error.
 - **Real benchmark:** a 1-minute clip of known time, US-wide search. Success = the true location ranks 1st. Report the true location's rank and error distance, plus survivor counts per stage.
+- **Automation first:** both of the above are fully automated runs (see Operating modes).
+- **Human-in-the-loop evaluation (milestone 9):** real recordings with known locations and times, each run fully automated and with an analyst. The analyst is blind to the true location. Compare rank, error distance, and survivors per stage, and record cost: analyst minutes per intervention type (event review, harmonic fixes, track exclusions, area exclusions, candidate review) plus compute time. Report which interventions improve accuracy most per minute of analyst time, and on which kinds of clips (low SNR, edge-clipped passes, sparse ADS-B, few events) a human helps at all.
 
 ## Countermeasures analysis
 Apply common audio processing to synthetic and real clips, rerun the full pipeline, and report:
@@ -127,12 +137,13 @@ For each: whether the true location still ranks 1st, how ridge SNR and fitted pa
 1. Physics + tests. *(done in session 1)*
 2. Synthetic audio + spectrogram + ridge + per-event fit. *(done in session 1)*
 3. Tracks: ADS-B ingest, interpolation, type-code prop/jet classification, event classification, ENU conversion, DEM sampling. *(done in session 2, tag milestone-3)*
-4. Cascade: grid generation, CPA prefilter, offset filter, silence filter, with stage counts. The synthetic true cell survives. (Also: geoid grids, covariance-derived tolerances, outputs contract, QGIS template, plots/viewer.)
+4. Cascade: grid generation, CPA prefilter, offset filter, silence filter, with stage counts. The synthetic true cell survives. (Also: geoid grids, covariance-derived tolerances, outputs contract, QGIS template, plots/viewer.) *(done in session 3)*
 4.5. Real-data calibration: known-location recordings near an airport plus OpenSky tracks; set detection, classification, and audibility thresholds.
 5. Full curve modeling + locked N-event scoring. The synthetic true cell ranks 1st.
 6. Exports + QGIS MCP visualization.
 7. Real data: regional run, then the US-wide 1-minute benchmark.
 8. Countermeasures analysis and report.
+9. Human-in-the-loop guidance and evaluation: decisions-as-data consumed by the same pipeline, review tooling, then the automated-vs-HITL comparison on real recordings with known locations (see Validation).
 
 ## Known pitfalls
 - **Locked scoring:** per-event characterization fits t0 independently; scoring must not. Don't reuse independent t0s as scoring parameters.
@@ -149,4 +160,4 @@ For each: whether the true location still ranks 1st, how ridge SNR and fitted pa
 - **Scale:** at US scale, memory and runtime blow up without spatial pruning. Tile the grid and process by tile.
 
 ## Non-goals (for now)
-Multi-mic arrays, ML event classifiers, real-time processing, web UI, terrain acoustic modeling.
+Multi-mic arrays, ML event classifiers, real-time processing, web UI, terrain acoustic modeling. Human-in-the-loop tooling until milestone 9.
