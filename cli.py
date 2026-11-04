@@ -1313,6 +1313,11 @@ def _asdesigned_row(unit: dict, variant: str, sc_dir: Path, tmp: Path) -> dict:
     secs = _time.perf_counter() - t0
     rj = tmp / "out" / variant / "run.json"
     row["seconds"] = secs
+    if r.returncode != 0 and "no events detected" in (r.stderr or ""):
+        # same row as the in-process arms when run_locate returns None (an abstention, not an error)
+        row.update(outcome="abstained", status="none", failure="survival:none", n_candidates=0, n_events=0)
+        shutil_rmtree(tmp / "out")
+        return row
     if r.returncode != 0 or not rj.exists():
         row.update(outcome="error", status="none", error=(r.stderr or "")[-500:])
         return row

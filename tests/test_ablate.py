@@ -28,6 +28,25 @@ def test_realism_specs():
     assert cli.realism_for(CFG, "set:corridor_frac=1").corridor_frac == 1
 
 
+@pytest.mark.parametrize("rc, stderr, outcome", [(1, "no events detected\n", "abstained"),
+                                                  (1, "Traceback ...\nValueError: boom\n", "error")])
+def test_asdesigned_no_events_is_an_abstention_not_an_error(tmp_path, monkeypatch, rc, stderr, outcome):
+    import shutil
+    import subprocess
+
+    code = tmp_path / "asdesigned"
+    code.mkdir()
+    shutil.copy("config.yaml", code / "config.yaml")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, rc, "", stderr))
+    unit = {"scenario": "C", "config": "all", "seed": 0, "asdesigned_dir": str(code), "timeout_s": 900.0,
+            "config_path": "config.yaml"}
+    (tmp_path / "tmp").mkdir()
+    row = cli._asdesigned_row(unit, "V1-asdesigned", tmp_path / "sc", tmp_path / "tmp")
+    assert row["outcome"] == outcome and row["status"] == "none"
+    if outcome == "abstained":           # matches the in-process arms' row when run_locate returns None
+        assert row["failure"] == "survival:none" and row["n_candidates"] == 0 and row["n_events"] == 0
+
+
 @pytest.mark.slow
 def test_ablate_smoke_writes_rows_and_cleans_up(tmp_path):
     out = tmp_path / "abl"
