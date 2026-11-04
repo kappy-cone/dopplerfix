@@ -23,10 +23,11 @@ Everything here is pure (no file I/O); see export.write_scenario.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from typing import Sequence
 
 import numpy as np
 import pandas as pd
-from numpy.typing import NDArray
+from numpy.typing import ArrayLike, NDArray
 from scipy.interpolate import CubicSpline
 from scipy.ndimage import gaussian_filter1d
 
@@ -113,6 +114,7 @@ class SynthParams:
     track_pad_after_s: float = 60.0
     mic_height_m: float = 1.5
     mic_max_offset_m: float = 3000.0
+    n_cascade_decoys: int = 0            # decoys over cascade (CPA+offset) survivors; used by cli synth
 
     @classmethod
     def from_dict(cls, d: dict) -> "SynthParams":
@@ -402,26 +404,12 @@ def place_non_events(
 
     for i, (es, enu, tru) in enumerate(zip(events, event_enu, truths)):
         mirror = mirror_point(enu, t_rel, tru.t0_rel_s, mic_enu)
-        sep_vec = mirror - mic_enu[:2]
-        sep = float(np.hypot(*sep_vec))
-        u = sep_vec / max(sep, 1e-9)
         for j in range(p.n_decoys_per_event):
             cls = "prop" if rng.uniform() < 0.7 else "jet"
-            thr = p.threshold(cls)
             if not decoy_feasible(mirror, cls):
                 info.append(DecoyTruth("", "decoy", cls, i, (float(mirror[0]), float(mirror[1])), float("nan"), None))
                 continue
-            # Fly across the mic→mirror line on the far side of the mirror cell: close enough to be
-            # audible there, while every point of the (straight) track stays beyond the mic's threshold.
-            def mk():
-                s_lo, s_hi = far * thr - sep, p.decoy_target_slant_frac * thr
-                s_off = rng.uniform(s_lo, s_lo + 0.6 * (s_hi - s_lo))
-                anchor = mirror + u * s_off
-                sp = _random_spec(rng, p, cls, "decoy", 10 * i + j, anchor, rng.uniform(0.1, 0.9) * clip)
-                hdg = (np.degrees(np.arctan2(u[0], u[1])) + 90 + rng.uniform(-15, 15) + 180 * rng.integers(0, 2)) % 360
-                alt_lo = _class_ranges(p, cls)[1][0]
-                return replace(sp, heading_deg=float(hdg), alt_agl_m=float(rng.uniform(alt_lo, alt_lo + 200)))
-            try_place(mk, "decoy", cls, i, target=mirror)
+            try_place(_decoy_maker(rng, p, mirror, mic_enu, cls, 10 * i + j), "decoy", cls, i, target=mirror)
         for j in range(p.n_twins_per_event):
             try_place(lambda: _random_spec(rng, p, es.cls, "twin", 10 * i + j, far_anchor(es.cls),
                                            tru.t_cpa_received_rel_s + rng.uniform(-30, 30),
@@ -432,6 +420,60 @@ def place_non_events(
         try_place(lambda: _random_spec(rng, p, cls, "background", j, far_anchor(cls),
                                        rng.uniform(-0.2, 1.2) * clip, offset_scale=0.0),
                   "background", cls, None)
+    return specs, enus, info
+
+
+def _decoy_maker(rng: np.random.Generator, p: SynthParams, target: NDArray, mic_enu: NDArray, cls: str, idx: int):
+    """Spec factory: fly across the mic→target line on the far side of the target, close enough to be
+    audible there while every point of the (straight) track stays beyond the mic's threshold."""
+    target = np.asarray(target, float)
+    sep_vec = target - mic_enu[:2]
+    sep = float(np.hypot(*sep_vec))
+    u = sep_vec / max(sep, 1e-9)
+    thr, far = p.threshold(cls), p.inaudible_margin
+
+    def mk():
+        s_lo, s_hi = far * thr - sep, p.decoy_target_slant_frac * thr
+        s_off = rng.uniform(s_lo, s_lo + 0.6 * (s_hi - s_lo))
+        anchor = target + u * s_off
+        sp = _random_spec(rng, p, cls, "decoy", idx, anchor, rng.uniform(0.1, 0.9) * p.duration_s)
+        hdg = (np.degrees(np.arctan2(u[0], u[1])) + 90 + rng.uniform(-15, 15) + 180 * rng.integers(0, 2)) % 360
+        alt_lo = _class_ranges(p, cls)[1][0]
+        return replace(sp, heading_deg=float(hdg), alt_agl_m=float(rng.uniform(alt_lo, alt_lo + 200)))
+    return mk
+
+
+def decoy_target_feasible(p: SynthParams, target: ArrayLike, mic_enu: NDArray, cls: str = "prop") -> bool:
+    """A decoy can be audible at the target yet inaudible at the mic only if they are far enough apart."""
+    sep = float(np.hypot(*(np.asarray(target, float)[:2] - mic_enu[:2])))
+    return sep >= (p.inaudible_margin - p.decoy_target_slant_frac) * p.threshold(cls)
+
+
+def place_target_decoys(rng: np.random.Generator, p: SynthParams, targets: Sequence[tuple[float, float]],
+                        mic_enu: NDArray, ground_rel: float, t_rel: NDArray, c: float,
+                        tries: int = 300) -> tuple[list[TrackSpec], list[NDArray], list[DecoyTruth]]:
+    """One prop decoy per target point (audible there, inaudible at the mic). Infeasible targets are recorded."""
+    specs, enus, info = [], [], []
+    for j, tgt in enumerate(targets):
+        tgt = np.asarray(tgt, float)[:2]
+        cls = "prop"
+        if not decoy_target_feasible(p, tgt, mic_enu, cls):
+            info.append(DecoyTruth("", "decoy", cls, None, (float(tgt[0]), float(tgt[1])), float("nan"), None))
+            continue
+        mk = _decoy_maker(rng, p, tgt, mic_enu, cls, 900 + j)
+        tgt3 = np.array([tgt[0], tgt[1], mic_enu[2]])
+        for _ in range(tries):
+            s = resolve_rx_time(mk(), mic_enu, ground_rel, t_rel, c, n_iter=0)
+            enu = build_track_enu(s, mic_enu, ground_rel, t_rel)
+            d_mic = min_slant_in_clip(enu, t_rel, mic_enu, c, p.duration_s)
+            d_tgt = min_slant_in_clip(enu, t_rel, tgt3, c, p.duration_s)
+            if d_mic >= p.inaudible_margin * p.threshold(cls) and d_tgt <= p.decoy_target_slant_frac * p.threshold(cls):
+                specs.append(s)
+                enus.append(enu)
+                info.append(DecoyTruth(s.icao24, "decoy", cls, None, (float(tgt[0]), float(tgt[1])), d_mic, d_tgt))
+                break
+        else:
+            info.append(DecoyTruth("", "decoy", cls, None, (float(tgt[0]), float(tgt[1])), float("nan"), None))
     return specs, enus, info
 
 
@@ -549,6 +591,7 @@ def make_scenario(
     c: float = DEFAULT_C,
     mic_enu: NDArray | None = None,
     specs: list[TrackSpec] | None = None,
+    decoy_targets_enu: Sequence[tuple[float, float]] = (),
 ) -> Scenario:
     """Build tracks, a hidden mic and the recording. Deterministic given ``params.seed``.
 
@@ -559,9 +602,9 @@ def make_scenario(
     p = params
     rng = np.random.default_rng(p.seed)
     aux = np.random.default_rng([p.seed, 1])  # non-event placement and types: keeps the event stream stable
+    rad = p.mic_max_offset_m * np.sqrt(rng.uniform())   # always drawn, so a given mic_enu keeps the event stream
+    ang = rng.uniform(0, 2 * np.pi)
     if mic_enu is None:
-        rad = p.mic_max_offset_m * np.sqrt(rng.uniform())
-        ang = rng.uniform(0, 2 * np.pi)
         mic_enu = np.array([rad * np.cos(ang), rad * np.sin(ang), 0.0])
     mic_enu = np.array([mic_enu[0], mic_enu[1], ground_elev_m + p.mic_height_m - frame.h0], float)
     auto = specs is None
@@ -584,6 +627,11 @@ def make_scenario(
         extra, _, decoys = place_non_events(aux, p, ev_specs, ev_enu, truths, mic_enu, ground_rel, t_track, c)
         specs = specs + extra
     specs = assign_types(aux, specs)
+    if len(decoy_targets_enu):
+        drng = np.random.default_rng([p.seed, 2])
+        extra, _, more = place_target_decoys(drng, p, decoy_targets_enu, mic_enu, ground_rel, t_track, c)
+        specs = specs + assign_types(drng, extra)
+        decoys = decoys + more
 
     noise = colored_noise(rng, n, fs)
     p_noise = band_power(noise, fs, p.noise_band_hz)

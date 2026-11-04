@@ -53,3 +53,44 @@ def test_array_dem_bilinear_geoid_and_bounds():
     holes = geo.ArrayDEM(np.where(elev == 110, -9999, elev), tf, "EPSG:4326", nodata=-9999)
     assert np.isnan(holes.sample(40.0 - 0.015, -105.0 + 0.015))
     assert geo.FlatDEM(1600.0).sample([1, 2], [3, 4]).tolist() == [1600.0, 1600.0]
+
+
+def test_geoid_grid_and_constant_fallback(caplog):
+    import os
+
+    import pyproj
+
+    if not os.path.exists("data/proj/us_noaa_g2018u0.tif"):
+        pytest.skip("geoid grids not in data/proj (see CLAUDE.md Known pitfalls)")
+    pyproj.datadir.append_data_dir(os.path.abspath("data/proj"))
+    g = geo.GeoidModel(["us_noaa_g2018u0.tif", "us_nga_egm96_15.tif"], -99.0)
+    assert g.source.startswith("grid:")
+    n = g(np.array([40.0394, 0.0]), np.array([-105.2258, 0.0]))
+    assert n[0] == pytest.approx(-16.10, abs=0.05)       # GEOID18 near Boulder
+    assert n[1] == pytest.approx(17.16, abs=0.05)        # outside CONUS: EGM96
+    with caplog.at_level("WARNING"):
+        f = geo.GeoidModel(["missing_grid.tif"], -16.0)
+    assert f.source == "constant" and f(40.0, -105.0) == -16.0
+    assert any("fallback" in r.message for r in caplog.records)
+
+
+def test_windowed_dem_source_matches_full_raster(tmp_path):
+    import rasterio
+    from rasterio.transform import from_origin
+
+    import cli
+
+    rng = np.random.default_rng(1)
+    elev = 1500 + rng.normal(0, 20, (200, 200)).cumsum(0).cumsum(1) / 50
+    tr = from_origin(-105.3, 40.1, 0.001, 0.001)
+    path = tmp_path / "dem.tif"
+    with rasterio.open(path, "w", driver="GTiff", width=200, height=200, count=1, dtype="float64",
+                       crs="EPSG:4326", transform=tr) as ds:
+        ds.write(elev, 1)
+    full = geo.ArrayDEM(elev, tr, "EPSG:4326", None, 0.0)
+    src = cli.RasterDEMSource(path, geo.GeoidModel([], 0.0))
+    lat = rng.uniform(40.02, 40.08, 50)
+    lon = rng.uniform(-105.28, -105.22, 50)
+    win = src.for_bounds(lon.min(), lat.min(), lon.max(), lat.max())
+    assert win.elev.shape[0] < 200 and win.elev.shape[1] < 200          # windowed, not the whole raster
+    np.testing.assert_allclose(win.sample(lat, lon), full.sample(lat, lon), atol=1e-9)

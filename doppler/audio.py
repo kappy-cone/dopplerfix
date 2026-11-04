@@ -176,3 +176,37 @@ def running_median_freq(P: NDArray, k: int, step: int | None = None) -> NDArray:
     j = np.clip(j, 0, len(centres) - 2)
     w = ((idx - centres[j]) / (centres[j + 1] - centres[j]))[:, None]
     return ((1 - w) * med[j] + w * med[j + 1]).astype(P.dtype)
+
+
+def display_spectrogram(x: NDArray, fs_hz: float, fmax_hz: float, max_time_px: int = 1500,
+                        max_freq_px: int = 400, chunk_s: float = 300.0) -> Spectrogram:
+    """Display-only spectrogram: dB excess over the per-bin median, float32, at most max_time_px × max_freq_px.
+
+    Computed chunk by chunk (memory ∝ chunk) and max-pooled in frequency, so any
+    clip length gives a small image. Never used for analysis.
+    """
+    x = mix_to_mono(x)
+    dur = len(x) / fs_hz
+    hop = max(dur / max_time_px, 0.1)
+    win = max(1.0, hop)
+    afs = float(min(fs_hz, max(2.5 * fmax_hz, 200.0)))
+    p = SpectrogramParams(afs, win, 1.0 - hop / win, min(fmax_hz, afs / 2))
+    ts, ps = [], []
+    a = 0.0
+    while a < dur:
+        b = min(dur, a + chunk_s)
+        s = compute_spectrogram(x, fs_hz, p, (a, min(dur, b + win)))
+        keep = (s.t_s >= a) & (s.t_s < b) if b < dur else (s.t_s >= a)
+        ts.append(s.t_s[keep])
+        ps.append(s.power_db[:, keep])
+        f = s.f_hz
+        a = b
+    P = np.concatenate(ps, axis=1)
+    t = np.concatenate(ts)
+    g = int(np.ceil(len(f) / max_freq_px))
+    if g > 1:
+        n = (len(f) // g) * g
+        P = P[:n].reshape(n // g, g, -1).max(axis=1)
+        f = f[:n].reshape(n // g, g).mean(axis=1)
+    P = (P - np.median(P, axis=1, keepdims=True)).astype(np.float32)
+    return Spectrogram(t_s=t, f_hz=f, power_db=P, window_s=win, hop_s=hop)

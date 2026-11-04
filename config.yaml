@@ -7,19 +7,24 @@ search:
   mode: regional             # regional | us (US-wide, milestone 7)
 
 region:
-  center_lat: 40.0394        # search-region centre (ENU origin for synthetic scenarios and plots)
-  center_lon: -105.2258
-  radius_m: 6000
-  ground_elev_m: 1600.0      # flat-DEM fallback (ellipsoidal) when dem.path is null
+  name: synth_boulder        # polygon in regions_path (layer search_regions, field name)
+  regions_path: inputs/search_regions.gpkg
+  ground_elev_m: 1600.0      # flat-DEM fallback (ellipsoidal) when dem.path is null; synthetic scenarios
+  # Synthetic scenarios use the polygon's centroid as ENU origin and its equal-area radius.
 
 dem:
-  path: null                 # e.g. data/dem.tif (any CRS; read in windows by cli.py)
-  geoid_undulation_m: 0.0    # added to DEM heights: orthometric -> ellipsoidal (≈ -17 m near Boulder, EGM96)
+  path: null                 # e.g. data/dem/region.vrt (any CRS; read windowed per grid tile)
+  geoid_undulation_m: -16.0  # FALLBACK ONLY (logs a warning) when no geoid grid is found
+
+geoid:                       # orthometric DEM -> ellipsoidal: h = H + N, N sampled from PROJ grids
+  grid_dir: data/proj        # copied from QGIS.app (see CLAUDE.md Known pitfalls)
+  grids: [us_noaa_g2018u0.tif, us_nga_egm96_15.tif]   # first grid covering a point wins
 
 time_prior:
   mode: known                # known | window | relative
   start_utc: "2026-06-15T14:00:00Z"
   window_utc: null           # [earliest, latest] start when mode == window
+  clock_tol_s: 10.0          # Δt prior half-width (known mode): clock error lives here, not in tolerances
 
 environment:
   temperature_c: 20.0        # c = 331.3 + 0.606*T  (20 C -> 343.4 m/s)
@@ -107,6 +112,8 @@ fit:
   min_descent_frac: 0.02
   f0_drift_prior_per_s: 1.0e-4
 
+# PROVISIONAL until milestone 4.5 (real-data calibration): the jet/prop decision thresholds
+# below (harmonic_weak_db, prop_min_harmonics, jet_min_broadband_rise_db). Don't tune against synthetic data.
 classify:
   prop_band_hz: [40, 900]
   jet_band_hz: [900, 3800]
@@ -140,28 +147,56 @@ grid:
   spacing_m: 200
   crs: auto                  # auto -> UTM zone (regional) or EPSG:5070 (us)
 
-cascade:                     # milestone 4
-  v_tol_frac: 0.25           # generous: wind biases Doppler v away from ground speed
-  d_tol_frac: 0.25
-  sigma_k: 3.0               # tolerance = max(sigma_k * fit sigma, the floors above)
-  cpa_time_tol_s: 10.0       # known-time mode: clock error allowance for the CPA time
-  offset_tol_s: 3.0
-  truncated_coverage: 2.0    # coverage (in d/v) below this on a side -> widen v/d tolerances
+# Cascade tolerances per event: tol = √((n_sigma·w_cov·σ)² + sys²) + grid term.
+#   σ from the fit covariance; w_cov = truncated_tol_mult per edge-clipped side;
+#   sys: v ← wind; d ← height ⊕ d·wind/v (d = v·τ); t ← timing ⊕ d·wind/c²;
+#   grid term (hard bound, added linearly): δd ≤ h, δT ≤ h/v + h/c, h = half cell diagonal.
+cascade:
+  n_sigma: 3.0
+  truncated_coverage: 2.0    # coverage (in d/v) below this on a side -> widen σ
   truncated_tol_mult: 2.0
-  baro_alt_tol_m: 150.0      # extra height tolerance for barometric-altitude tracks
-  audible_slant_m: {prop: 3000.0, jet: 6000.0, unknown: 6000.0}
+  wind_sys_mps: 15.0         # PROVISIONAL until milestone 4.5
+  height_sys_m: 30.0         # PROVISIONAL: DEM + geoid + ADS-B geometric altitude error
+  timing_sys_s: 1.0          # PROVISIONAL: straight-line t0 bias on curved/climbing tracks
+  baro_alt_tol_m: 150.0      # extra height allowance for barometric-altitude tracks
+  tile_cells: 128            # grid tile edge (cells); the full grid is never built at once
+  window_pad_s: 2.0
+  prune_height_margin_m: 5000.0   # tile-pruning bound on ground height (not a tolerance)
+  # PROVISIONAL until milestone 4.5. Used by the silence filter (and synth decoy placement).
+  # unknown-class tracks use the smallest value, so the silence filter stays lenient on type gaps.
+  audible_slant_m: {prop: 3000.0, jet: 6000.0, unknown: 3000.0}
   silence_mode: reject       # reject | count
   silence_max_unexplained: 0
+  silence_min_audible_s: 20.0   # PROVISIONAL: in-clip audible time for a pass to be expected (≈ detect.min_duration_s)
+  silence_dt_s: 1.0          # track decimation for the silence index
   explain_time_tol_s: 20.0
+  silence_explain: cpa        # cpa: an audible pass is explained only by a CPA-consistent pass of that track | time: by any compatible event in time (lenient)
 
 score:                       # milestone 5
   dt_halfwidth_s: 10.0       # Δt search range in known-time mode
   dt_coarse_step_s: 0.5
   ridge_decimate_s: 0.5
   top_n: 10
+  allow_shared_tracks: false # forbid assigning one aircraft to two events
+  max_hypotheses_per_cell: 64
+
+outputs:
+  root: outputs
+  keep_runs: 5               # cli.py clean keeps the newest N runs
+  write_grid: auto           # auto: regional runs only | true | false
+  max_raster_cells: 50000000 # score.tif built in memory below this; above, a sparse tiled GeoTIFF
+  top_plot: 3                # candidates drawn in the static spectrogram plot
+
+viewer:
+  plotly_version: 2.35.2     # outputs/plotly.min.js, from https://cdn.plot.ly/plotly-2.35.2.min.js
+  plotly_sha256: 6d21266ce1bd7d9e5ab4e115989c70c20de0382fd973a8f26ab58619eba4d603
+  max_time_px: 1500          # display-only downsampling of the spectrogram
+  max_freq_px: 400
+  max_candidates: 20
 
 synth:
   seed: 0
+  n_cascade_decoys: 3        # cli synth --cascade-decoys: decoys over CPA/offset survivors far from the mic
   duration_s: 600
   fs_hz: 8000
   n_tracks: 3                # legacy layout, used only when event_rx_times_s is null
