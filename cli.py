@@ -1550,7 +1550,9 @@ def ablate_summary(out: Path, config_path: str) -> int:
             d["variant"] = f"V0->V1 ({trig})"
             groups.setdefault((sc, conf, d["variant"]), []).append(d)
     summ = {f"{sc}|{conf}|{v}": ev_.summarize(rs) for (sc, conf, v), rs in sorted(groups.items())}
-    reorder = {v: ev_.reorder_rule(rs) for (sc, conf, v), rs in groups.items() if sc == "C" and conf == "all"}
+    reorder = {v: ("not applicable (the as-designed code reports no failure taxonomy)"
+                   if v.endswith("-asdesigned") else ev_.reorder_rule(rs))
+               for (sc, conf, v), rs in groups.items() if sc == "C" and conf == "all"}
     (out / "summary.json").write_text(json.dumps({"groups": summ, "reorder_rule_C_all": reorder}, indent=1,
                                                  default=_json_safe))
     lines = ["| scenario | config | variant | n | correct | abstained | wrong | confident-wrong | timeout | "

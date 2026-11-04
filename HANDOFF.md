@@ -3,7 +3,23 @@
 Read CLAUDE.md first; it is authoritative for methodology and conventions. This file
 records session state, decisions, and what is fragile.
 
-## START HERE (end of session 4: Phase 0 code done, pilot run; moving to the user's PC via GitHub)
+## START HERE (session 5: on the user's PC; Stage A done, Phase 0 complete; next is Phase 1)
+**Session 5.** New machine set up (Ryzen 7 9800X3D, 8 cores / 16 threads, 59 GB): 157 tests passed (133
+fast, 24 slow), then Stage A ran at `--jobs 8` in about 1 h 40 min. Read **`reports/stageA.md`** first.
+- **Re-ordering rule: written order** (no failure class reaches 40 %; V1 is 37 % survival at CPA and 37 %
+  discrimination). So Phase 1 goes next, starting with P1.1. The pilot's "P3.5 first" did not hold at n = 50.
+- **All-on C, n = 50:** V1 7 correct, 32 abstained, 7 confident-wrong; V0 2 / 37 / 9; V1-asdesigned 12 / 18 / 12.
+- **Missed target, reported (not tuned):** the provisional `inconsistent` status (`score.inconsistent_rms_sigma`
+  3) labels 7 correct V1 answers as abstentions and does not separate right from wrong answers (39 % vs 45 %
+  flagged). It is most of the V1 vs V1-asdesigned gap: their rank-1 answers are mostly identical. P1.1 / P1.4
+  replace it; measure them against this baseline.
+- Fixed: the as-designed wrapper recorded "no events detected" as `error` (commit 385a725; the 5 affected
+  units were rerun).
+- Setup notes for this machine: the system `python3` is not the project's; the venv uses
+  `~/.local/bin/python3.12`. `../qgis-asdesigned/data/proj` is a symlink to `dopplerfix/data/proj`, because the
+  as-designed arm runs `locate` from inside the worktree and would otherwise fall back to the constant geoid.
+
+## Session 4 summary (Phase 0 code done, pilot run; moved to the user's PC via GitHub)
 Session 4 did a design comparison against doppler.txt (a video in which someone builds a similar tool),
 three independent skeptic reviews, a combined plan with an adversarial review, the user's decisions, and
 **Phase 0** of that plan. Read in this order:
@@ -33,10 +49,9 @@ three independent skeptic reviews, a combined plan with an adversarial review, t
     the provisional `inconsistent` status (`score.absolute_fit_status`); `cli.py ablate` (paired, resumable
     rows.jsonl, `--jobs`, a per-variant wall-clock cap, a free-space guard, scenarios deleted after use).
   - **P0.5:** full slow suite run. **P0.7:** registry.
-- **P0.6 pilot done** (reports/ablation_pilot.md). **Stage A not run.** Its compute is about 36 h, about 12 h
-  wall at `--jobs 3` (3× the plan's estimate, from V1 scoring on clips with spurious events). Before running it,
-  ask the user: run as is on the PC, lower the cap, or profile `score.rank_cells` first (CLAUDE.md: flag the
-  hot spot before reaching for numba or multiprocessing).
+- **P0.6 pilot done** (reports/ablation_pilot.md). **Stage A done in session 5** (reports/stageA.md): the
+  user chose to run it as is (`--jobs 8`, 900 s cap). `score.rank_cells` is still unprofiled; scoring is
+  about 95 % of V1's time (CLAUDE.md: flag the hot spot before reaching for numba or multiprocessing).
 
 ### Running Stage A (on a committed, clean tree; the driver refuses a dirty tree without --allow-dirty)
 ```bash
@@ -57,7 +72,7 @@ retried. The as-designed arms report only the old run.json fields.
   access isn't granted by P4.3/P5.2, fall back to https://opensky-network.org/data/scientific.
 
 ### Next after Stage A (plan §3, dependency order)
-Apply the re-ordering rule to Stage A (the pilot points to P3.5 before Phase 2). Then Phase 1: P1.1
+The re-ordering rule is applied (reports/stageA.md: written order). Phase 1: P1.1
 calibrated likelihood (arm), P1.2 assignment-level ranking, P1.3 ellipse, P1.4 ambiguity v2, P1.5 clock-prior
 diagnostic, P1.6 reduced sweep. Still pending in CLAUDE.md: the single-event pitfall rewording (U7), the
 Validation text (U10), and the two doc fixes in plan §7.
