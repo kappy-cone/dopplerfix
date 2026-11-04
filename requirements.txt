@@ -1,0 +1,13 @@
+# Direct dependencies, pinned. Python 3.12 venv (.venv).
+numpy==2.5.4
+scipy==1.18.1
+pandas==3.1.0
+matplotlib==3.11.2
+soundfile==0.14.0
+pymap3d==3.2.0
+pyproj==3.8.0
+rasterio==1.5.2
+geopandas==1.2.0
+shapely==2.2.0
+pyyaml==6.0.3
+pytest==9.2.0

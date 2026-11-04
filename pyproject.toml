@@ -1,0 +1,13 @@
+[project]
+name = "doppler"
+version = "0.1.0"
+description = "Acoustic Doppler geolocation: locate a recording from aircraft flyover Doppler curves + ADS-B"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+    "slow: end-to-end tests that synthesize minutes of audio (deselect with -m 'not slow')",
+]
+addopts = "-ra"

@@ -1,0 +1,85 @@
+# Sample configuration for acoustic Doppler geolocation.
+# All units SI. Times in config are ISO-8601 UTC strings; internally they become
+# float seconds since the Unix epoch.
+
+region:
+  center_lat: 40.0394        # search-region centre (also the ENU origin)
+  center_lon: -105.2258
+  radius_m: 6000             # search radius around the centre
+  ground_elev_m: 1600.0      # flat-DEM stub elevation until a real DEM is wired in
+  dem_path: null             # e.g. data/dem.tif (milestone 3)
+
+time_prior:
+  # mode: known | window | relative
+  mode: known
+  start_utc: "2026-06-15T14:00:00Z"   # used when mode == known
+  window_utc: null                    # [earliest, latest] start when mode == window
+
+environment:
+  temperature_c: 20.0        # c = 331.3 + 0.606*T  (20 C -> 343.4 m/s)
+  temperature_search_c: null # e.g. [5, 30] to search c
+
+mic:
+  height_agl_m: 1.5
+
+spectrogram:
+  analysis_fs_hz: 2000       # audio is resampled to this before the STFT
+  window_s: 1.0
+  overlap: 0.9
+  fmax_hz: 1000.0
+
+detect:
+  band_hz: [40, 900]
+  smooth_s: 3.0
+  trigger_db: 10.0           # tonal excess above the recording's baseline to declare an event
+  extend_db: 4.0             # hysteresis: extend the window while excess > baseline + this
+  baseline_percentile: 20.0
+  min_duration_s: 20.0
+  pad_s: 5.0
+  split_dip_db: 6.0          # split merged windows at dips this deep
+  manual_windows: []         # e.g. [{start_s: 100, end_s: 220, band_hz: [80, 260]}]
+
+ridge:
+  max_up_hz_per_s: 4.0       # Doppler curves descend; allow small upward wobble
+  max_down_hz_per_s: 60.0
+  jump_penalty_db_per_hz: 0.5
+  weak_db: 12.0              # reject ridge columns weaker than this above the per-bin median
+  outlier_hz: 3.0
+
+fit:
+  v_bounds_mps: [10, 320]
+  d_bounds_m: [20, 30000]
+  corr_inflation: null       # null -> from residual autocorrelation (>= sqrt(window/hop))
+  outlier_sigma: 4.0
+  f0_drift_prior_per_s: 1.0e-4   # 1-sigma source-tone drift rate prior (RPM wander)
+
+tracks:
+  source: csv                # csv | parquet | opensky (milestone 7)
+  path: data/tracks.csv
+  resample_s: 0.25
+
+grid:
+  spacing_m: 200
+  top_n: 5
+
+score:
+  v_tolerance_frac: 0.25     # generous: wind biases Doppler v away from ground speed
+  unmatched_event_penalty: 10.0   # capped log-likelihood penalty for no matching track
+  negative_evidence_weight: 0.0
+
+synth:
+  seed: 0
+  duration_s: 600
+  fs_hz: 8000
+  n_tracks: 3
+  snr_db: 10.0               # tone power at CPA vs noise power in noise_band_hz
+  noise_band_hz: [40, 1000]
+  harmonic_amps: [1.0, 0.5, 0.3]
+  f0_range_hz: [80, 180]
+  speed_range_mps: [55, 90]
+  alt_agl_range_m: [300, 900]
+  offset_range_m: [150, 1200]
+  excess_atten_db_per_km: 3.0
+  f0_jitter_frac: 0.002
+  broadband_to_tone_db: 0.0
+  curved_fraction: 0.34      # share of tracks given a gentle turn
