@@ -38,9 +38,14 @@ def test_locate_outputs_contract_and_true_cell(scenario_dir, tmp_path, monkeypat
     s = rj["survivors"]
     assert s["grid"] > s["cpa"] >= s["offset"] >= s["silence"] >= 1
     assert rj["truth_eval"]["survived_all_stages"]
+    assert rj["truth_eval"]["rank"] == 1 and rj["truth_eval"]["true_cell_assignment_correct"]
+    assert rj["truth_eval"]["rank1_error_m"] < 150
+    assert rj["human_in_loop"] is False and rj["manual_inputs"] == {}
     assert rj["silence_removed"] >= 1                                  # the cascade decoys hit the silence filter
     assert rj["disk_footprint"]["total_bytes"] < 5_000_000
     assert pyogrio.read_info(run / "results.gpkg", layer="stage_silence")["features"] == s["silence"]
+    cands = pyogrio.read_dataframe(run / "results.gpkg", layer="candidates")
+    assert cands["rank"].min() == 1 and cands["score"].notna().all() and cands["f0_e0_hz"].notna().all()
     with rasterio.open(run / "score.tif") as ds:
         assert ds.crs.to_epsg() == 32613 and ds.tags(ns="IMAGE_STRUCTURE")["LAYOUT"] == "COG"
     for f in ("funnel.png", "spectrogram_top.png", "score_hist.png", "viewer.html"):

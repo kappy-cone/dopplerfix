@@ -85,14 +85,28 @@ def test_layer_buffer_appends_and_fixes_layer_set(tmp_path):
 
 
 def test_viewer_references_shared_plotly_and_is_small(tmp_path):
+    from types import SimpleNamespace
+
+    from doppler import cascade as cs
+
     x = np.random.default_rng(0).normal(size=8000 * 60)
     spec = audio.display_spectrogram(x, 8000, 400.0, max_time_px=300, max_freq_px=100)
     assert spec.power_db.dtype == np.float32 and spec.power_db.shape[1] <= 301 and spec.power_db.shape[0] <= 100
-    cand = [{"cell_id": 1, "lat": 40.0, "lon": -105.0, "dt_s": 0.0, "dt_lo_s": -1.0, "dt_hi_s": 1.0,
-             "interim_cost": 0.3, "interim_rank": 1,
-             "curves": [{"icao24": "abc", "f0_hz": 100.0, "t_rel_s": np.linspace(0, 60, 50), "ratio": np.ones(50)}]}]
+    rt = np.linspace(10, 50, 200)
+    ev = cs.ObservedEvent(0, 0, 30.0, 60.0, 500.0, 120.0, np.eye(3), (3.0, 3.0), rt, 120 + 0 * rt, np.ones(200))
+    fit = SimpleNamespace(f0_hz=120.0, v_mps=60.0, d_m=500.0, t0_s=28.5, t_cpa_received_s=30.0,
+                          sigma={"f0_hz": 0.1, "v_mps": 0.5, "d_m": 5.0, "t0_s": 0.1}, f_pre_hz=142.0, f_post_hz=104.0)
+    cand = [{"cell_id": 1, "rank": 1, "score": 0.6, "interim_rank": 2, "lat": 40.0, "lon": -105.0, "dt_s": 0.0,
+             "dt_lo_s": -1.0, "dt_hi_s": 1.0, "label": "x",
+             "curves": [{"icao24": "abc", "callsign": "A", "f0_hz": 120.0, "t0_s": 0.0, "step_s": 0.25,
+                         "ratio": [1.0] * 200 + [None] * 40, "rms_hz": 0.1, "n_missing": 0,
+                         "geom": {"v_mps": 60.0, "d_m": 500.0, "t0_rel_s": 28.5, "t_rx_rel_s": 30.0, "alt_m": 2100.0,
+                                  "f_pre_hz": 142.0, "f_post_hz": 104.0, "max_roc_hz_s": 2.1}}]}]
     out = tmp_path / "viewer.html"
-    plot.write_viewer(out, "run", spec, [], cand)
+    plot.write_viewer(out, "run", x, 8000, 1.7e9, [ev], [fit], cand)
     html = out.read_text()
-    assert '<script src="../plotly.min.js"></script>' in html and "Plotly.newPlot" in html or "Plotly.react" in html
-    assert "milestone 5" in html and len(html) < 300_000
+    assert '<script src="../plotly.min.js"></script>' in html
+    for key in ("Compare candidates", "Event fit", "Take snapshot", "BEST = midpoint", "f_pre", "max RoC", "live score"):
+        assert key in html
+    assert "NaN" not in html.split("const D = ")[1].split(";\n")[0]       # strict JSON payload
+    assert len(html) < 300_000

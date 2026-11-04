@@ -64,7 +64,7 @@ def _xyz_uri(url: str) -> str:
 # Styles
 # ---------------------------------------------------------------------------
 def style_candidates(lyr: QgsVectorLayer) -> None:
-    """By rank (coalesce(rank, interim_rank): interim cascade rank until milestone 5)."""
+    """By rank (locked score); falls back to interim_rank if rank is ever null."""
     root = QgsRuleBasedRenderer.Rule(None)
     rank = 'coalesce("rank", "interim_rank")'
     for label, expr, color, size, shape in [
@@ -128,8 +128,8 @@ def style_events(lyr: QgsVectorLayer) -> None:
     lyr.setRenderer(QgsCategorizedSymbolRenderer("event", cats))
 
 
-def style_score(lyr: QgsRasterLayer, vmin: float = 0.0, vmax: float = 2.0) -> None:
-    """Colour ramp, low (good) = bright. Interim cascade-consistency range 0–2 until milestone 5."""
+def style_score(lyr: QgsRasterLayer, vmin: float = 0.5, vmax: float = 10.0) -> None:
+    """Colour ramp, low (good) = bright. Locked N-event score (pooled Huber loss; ~0.5 = noise-limited fit)."""
     ramp = QgsGradientColorRamp(QColor("#fde725"), QColor("#440154"))
     ramp.setStops([])
     shader_fn = QgsColorRampShader(vmin, vmax, ramp, QgsColorRampShader.Interpolated)

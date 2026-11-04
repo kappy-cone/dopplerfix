@@ -172,11 +172,16 @@ cascade:
   explain_time_tol_s: 20.0
   silence_explain: cpa        # cpa: an audible pass is explained only by a CPA-consistent pass of that track | time: by any compatible event in time (lenient)
 
-score:                       # milestone 5
-  dt_halfwidth_s: 10.0       # Δt search range in known-time mode
-  dt_coarse_step_s: 0.5
-  ridge_decimate_s: 0.5
+score:                       # locked N-event scoring: one shared Δt, one f0 per event
+  dt_coarse_step_s: 0.5      # coarse Δt grid over each hypothesis' feasible interval, then bounded refinement
+  dt_pad_s: 1.0              # widen that interval (still inside the time prior)
+  ridge_decimate_s: 0.5      # one median ridge point per bin
+  huber_k: 3.0               # robust loss threshold, in units of the event's ridge scatter
+  sigma_floor_hz: 0.05       # floor on ridge scatter σ
   top_n: 10
+  refine_in_cell: true       # cell score = best point inside the cell (±half spacing), not its centre
+  refine_max_cells: 500      # refine the best N cells by centre score
+  refine_dt_window_s: 3.0    # Δt half-width around the centre's Δt while refining
   allow_shared_tracks: false # forbid assigning one aircraft to two events
   max_hypotheses_per_cell: 64
 

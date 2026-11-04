@@ -411,6 +411,14 @@ def _cell_frame(spec, tile, rows, to_geo, **cols):
     return gpd.GeoDataFrame(data, geometry=geom, crs="EPSG:4326")
 
 
+def manual_inputs(cfg: dict, args) -> dict:
+    """Per-clip manual inputs that would make a run not fully automated (CLAUDE.md Operating modes)."""
+    m = {}
+    if section(cfg, "detect").get("manual_windows"):
+        m["detect.manual_windows"] = section(cfg, "detect")["manual_windows"]
+    return m
+
+
 def cmd_locate(args) -> int:
     """Cascade run (milestone 4) with the full outputs contract; scoring placeholders until milestone 5."""
     import time as _time
@@ -540,46 +548,75 @@ def cmd_locate(args) -> int:
                 "dt_lo_s": float(r.hypotheses.dt_lo_s[b]), "dt_hi_s": float(r.hypotheses.dt_hi_s[b]),
                 "tracks": [int(k_) for k_ in r.hypotheses.tracks[b]], "n_hypotheses": n_h,
                 "n_audible": int(r.n_audible[h]),
-                "cpa": [{"t_emit_s": float(r.passes.t_emit_s[q]), "r_m": float(r.passes.r_cpa_m[q]),
-                         "pos": r.passes.pos[q].copy()} for q in hp],
-                "hypotheses": [cascade.Hypothesis(int(spec.cell_ids(tile.i[h], tile.j[h])),
-                                                  tuple(int(k_) for k_ in r.hypotheses.tracks[q_]),
-                                                  (float(r.hypotheses.dt_lo_s[q_]), float(r.hypotheses.dt_hi_s[q_])))
-                               for q_ in np.flatnonzero(r.hypotheses.cell == h)],
+                "hyps": [(cascade.Hypothesis(int(spec.cell_ids(tile.i[h], tile.j[h])),
+                                             tuple(int(k_) for k_ in r.hypotheses.tracks[q_]),
+                                             (float(r.hypotheses.dt_lo_s[q_]), float(r.hypotheses.dt_hi_s[q_]))),
+                          [{"t_emit_s": float(r.passes.t_emit_s[q]), "r_m": float(r.passes.r_cpa_m[q]),
+                            "speed_mps": float(r.passes.speed_mps[q]), "pos": r.passes.pos[q].copy()}
+                           for q in r.hypotheses.passes[q_]])
+                         for q_ in np.flatnonzero(r.hypotheses.cell == h)],
             })
     timings.update({f"cascade_{k}_s": v for k, v in stage_s.items()})
     grid_exact = True
     if not write_grid:  # tiles that were never built still count towards the grid stage
         counts["grid"], grid_exact = geo.count_grid_cells(spec)
 
-    # Candidates (silence survivors), interim ranking until milestone 5
-    t = _time.perf_counter()
+    # Interim cascade ranking (kept for comparison), then locked N-event scoring of every hypothesis
     surv.sort(key=lambda d: d["interim_cost"])
     for k_, d in enumerate(surv, 1):
         d["interim_rank"] = k_
+    t = _time.perf_counter()
+    sp = score.ScoreParams.from_dict(section(cfg, "score"))
+    by_id = {d["cell_id"]: d for d in surv}
+    ranked = score.rank_cells(events, [(d["cell_id"], d["xyz"], [h for h, _ in d["hyps"]]) for d in surv], ts,
+                              prior.start_s, c, sp, (prior.dt_lo_s, prior.dt_hi_s), 0.5 * spec.spacing_m)
+    n_scored = sum(len(d["hyps"]) for d in surv)
+    for r in ranked:
+        d = by_id[r.cell_id]
+        h, cp_ = d["hyps"][r.hyp_index]
+        sc = r.best
+        la, lo_, _ = geo.ecef_to_geodetic(r.xyz_est)
+        cpa = ([score.cpa_geometry(r.xyz_est, k_, ts, cp0["t_emit_s"]) for k_, cp0 in zip(sc.assignment, cp_)]
+               if r.refined else cp_)
+        d.update(score=sc.cost, score_centre=r.score_centre, dt_s=sc.dt_s, dt_lo_s=h.dt_bounds_s[0],
+                 dt_hi_s=h.dt_bounds_s[1], tracks=list(sc.assignment), cpa=cpa, f0=sc.f0_hz, rms=sc.rms_hz,
+                 n_missing=sc.n_missing, est_lat=float(la), est_lon=float(lo_),
+                 est_offset_m=float(np.hypot(*r.offset_en_m)), refined=r.refined, xyz_est=r.xyz_est)
+    surv.sort(key=lambda d: d["score"])
+    for k_, d in enumerate(surv, 1):
+        d["rank"] = k_
+    timings["score_s"] = _time.perf_counter() - t
+    timings["n_hypotheses_scored"] = n_scored
+    t = _time.perf_counter()
     N = len(events)
     tc = {tr.icao24: tr.type_code for tr in prepared}
-    cand = {"cell_id": [d["cell_id"] for d in surv], "rank": pd.array([pd.NA] * len(surv), dtype="Int32"),
-            "score": np.full(len(surv), np.nan, np.float32),
+    cand = {"cell_id": [d["cell_id"] for d in surv], "rank": np.array([d["rank"] for d in surv], np.int32),
+            "score": np.array([d["score"] for d in surv], np.float32),
             "interim_rank": np.array([d["interim_rank"] for d in surv], np.int32),
             "interim_cost": np.array([d["interim_cost"] for d in surv], np.float32),
             "dt_s": [d["dt_s"] for d in surv], "dt_lo_s": [d["dt_lo_s"] for d in surv],
             "dt_hi_s": [d["dt_hi_s"] for d in surv], "n_hypotheses": [d["n_hypotheses"] for d in surv],
             "n_audible": [d["n_audible"] for d in surv], "lat": [d["lat"] for d in surv],
-            "lon": [d["lon"] for d in surv], "ground_h_m": [d["ground_h_m"] for d in surv]}
+            "lon": [d["lon"] for d in surv], "ground_h_m": [d["ground_h_m"] for d in surv],
+            "score_centre": np.array([d["score_centre"] for d in surv], np.float32),
+            "est_lat": [d["est_lat"] for d in surv], "est_lon": [d["est_lon"] for d in surv],
+            "est_offset_m": np.array([d["est_offset_m"] for d in surv], np.float32),
+            "refined": [d["refined"] for d in surv]}
     for e in range(N):
-        cand[f"f0_e{e}_hz"] = np.full(len(surv), np.nan, np.float32)
+        cand[f"f0_e{e}_hz"] = np.array([d["f0"][e] for d in surv], np.float32)
+        cand[f"rms_e{e}_hz"] = np.array([d["rms"][e] for d in surv], np.float32)
         cand[f"track_e{e}"] = [str(ts.icao24[d["tracks"][e]]) for d in surv]
         cand[f"callsign_e{e}"] = [str(ts.callsign[d["tracks"][e]]) for d in surv]
-    buf.add("candidates", gpd.GeoDataFrame(cand, geometry=[Point(d["lon"], d["lat"]) for d in surv], crs="EPSG:4326"))
+    buf.add("candidates", gpd.GeoDataFrame(cand, geometry=[Point(d["est_lon"], d["est_lat"]) for d in surv],
+                                           crs="EPSG:4326"))
 
-    pts, prow = [], {"cell_id": [], "interim_rank": [], "event": [], "icao24": [], "callsign": [], "t_emit_utc": [],
+    pts, prow = [], {"cell_id": [], "rank": [], "event": [], "icao24": [], "callsign": [], "t_emit_utc": [],
                      "r_cpa_m": [], "alt_m": []}
     for d in surv:
         for e, (k_, cp_) in enumerate(zip(d["tracks"], d["cpa"])):
             la, lo, hh = geo.ecef_to_geodetic(cp_["pos"])
             pts.append(Point(float(lo), float(la)))
-            for key, val in (("cell_id", d["cell_id"]), ("interim_rank", d["interim_rank"]), ("event", e),
+            for key, val in (("cell_id", d["cell_id"]), ("rank", d["rank"]), ("event", e),
                              ("icao24", str(ts.icao24[k_])), ("callsign", str(ts.callsign[k_])),
                              ("t_emit_utc", pd.Timestamp(cp_["t_emit_s"], unit="s", tz="UTC").isoformat()),
                              ("r_cpa_m", cp_["r_m"]), ("alt_m", float(hh))):
@@ -617,8 +654,8 @@ def cmd_locate(args) -> int:
 
     ras = export.write_score_raster(
         run_dir / "score.tif", np.array([d["i"] for d in surv], np.int64), np.array([d["j"] for d in surv], np.int64),
-        np.array([d["interim_cost"] for d in surv], np.float32), spec.spacing_m, spec.crs,
-        "INTERIM cascade consistency (RMS |z| of v, d, t; lower is better). Replaced by the locked score in milestone 5",
+        np.array([d["score"] for d in surv], np.float32), spec.spacing_m, spec.crs,
+        "Locked N-event score: pooled mean Huber loss of ridge residuals in ridge-scatter units (lower is better)",
         int(oc.get("max_raster_cells", 50_000_000)))
     timings["export_s"] = _time.perf_counter() - t
 
@@ -631,24 +668,19 @@ def cmd_locate(args) -> int:
         ncand = int(vc.get("max_candidates", 20))
         cands = []
         for d in surv[:ncand]:
-            curves = []
-            for e, (ev, k_) in enumerate(zip(events, d["tracks"])):
-                tt = np.linspace(ev.ridge_t_s.min() - 15, ev.ridge_t_s.max() + 15, 400)
-                ratio, _, _, ok = score.modeled_ratio(d["xyz"], k_, ts, prior.start_s + d["dt_s"] + tt, c)
-                curves.append({"icao24": str(ts.icao24[k_]), "f0_hz": ev.f0_hz, "t_rel_s": tt[ok], "ratio": ratio[ok]})
-            cands.append({**{k2: d[k2] for k2 in ("cell_id", "lat", "lon", "dt_s", "dt_lo_s", "dt_hi_s",
-                                                  "interim_cost", "interim_rank")},
-                          "label": f"{d['lat']:.4f},{d['lon']:.4f}", "curves": curves})
+            cands.append(plot.candidate_view(d, events, ts, prior, c, spec))
         fmax = min(3900.0, max(300.0, 1.2 * max(float(e.ridge_f_hz.max()) for e in events)))
         disp = audio.display_spectrogram(x, fs, fmax, int(vc.get("max_time_px", 1500)), int(vc.get("max_freq_px", 400)))
         plot.plot_candidates_spectrogram(disp, events, cands, run_dir / "spectrogram_top.png",
                                          int(oc.get("top_plot", 3)),
                                          [e["t_cpa_received_rel_s"] for e in truth["events"]] if truth else None)
-        plot.plot_score_histogram({"offset survivors": np.concatenate(offset_costs) if offset_costs else np.zeros(0),
-                                   "silence survivors (candidates)": np.array([d["interim_cost"] for d in surv])},
-                                  run_dir / "score_hist.png", "interim cascade consistency (RMS |z|)")
+        plot.plot_score_histogram({"candidates (silence survivors)": np.array([d["score"] for d in surv])},
+                                  run_dir / "score_hist.png", "locked N-event score (lower is better)",
+                                  true_score=next((d["score"] for d in surv
+                                                   if truth and d["cell_id"] == int(spec.cell_ids(*true_ij))), None))
         plotly_js = root / "plotly.min.js"
-        plot.write_viewer(run_dir / "viewer.html", run_id, disp, events, cands, "../plotly.min.js")
+        plot.write_viewer(run_dir / "viewer.html", run_id, x, fs, prior.start_s, events, fits, cands,
+                          "../plotly.min.js", vc, sp, c)
         if not plotly_js.exists():
             print(f"warning: {plotly_js} missing; viewer.html needs it (pinned plotly.js {vc.get('plotly_version')})",
                   file=sys.stderr)
@@ -660,20 +692,39 @@ def cmd_locate(args) -> int:
     truth_eval = None
     if truth:
         tid = int(spec.cell_ids(*true_ij))
-        rank = next((d["interim_rank"] for d in surv if d["cell_id"] == tid), None)
+        tc_ = next((d for d in surv if d["cell_id"] == tid), None)
         from pyproj import Geod
 
+        g = Geod(ellps="WGS84")
         best = surv[0] if surv else None
-        err = Geod(ellps="WGS84").inv(truth["mic"]["lon"], truth["mic"]["lat"], best["lon"], best["lat"])[2] if best else None
+        err = g.inv(truth["mic"]["lon"], truth["mic"]["lat"], best["est_lon"], best["est_lat"])[2] if best else None
+        err_c = g.inv(truth["mic"]["lon"], truth["mic"]["lat"], best["lon"], best["lat"])[2] if best else None
+        ib = min(surv, key=lambda d: d["interim_rank"]) if surv else None
+        true_assign = None
+        if tc_ is not None:
+            ev_icao = [e["icao24"] for e in truth["events"]]
+            true_assign = [str(ts.icao24[k_]) for k_ in tc_["tracks"]]
         truth_eval = {"true_cell_id": tid, "true_cell_ij": true_ij, "true_cell_reached": true_stage,
-                      "survived_all_stages": true_stage == "silence", "interim_rank": rank,
-                      "interim_rank1_error_m": err, "note": "rank is the interim cascade ranking until milestone 5"}
+                      "survived_all_stages": true_stage == "silence",
+                      "rank": tc_["rank"] if tc_ else None, "score": tc_["score"] if tc_ else None,
+                      "rank1_error_m": err, "rank1_cell_centre_error_m": err_c,
+                      "rank1_score": best["score"] if best else None,
+                      "rank_by_centre_score": (sorted(surv, key=lambda d: d["score_centre"]).index(tc_) + 1) if tc_ else None,
+                      "true_cell_assignment": true_assign,
+                      "true_cell_assignment_correct": (true_assign is not None and
+                                                       sorted(true_assign) == sorted(e["icao24"] for e in truth["events"])),
+                      "interim_rank": tc_["interim_rank"] if tc_ else None,
+                      "interim_rank1_error_m": g.inv(truth["mic"]["lon"], truth["mic"]["lat"], ib["lon"], ib["lat"])[2]
+                      if ib else None}
 
     timings["total_s"] = _time.perf_counter() - T0
     info = {
         "run_id": run_id, "created_utc": pd.Timestamp.now(tz="UTC").isoformat(), "git": _git_state(),
-        "milestone": 4, "interim": {"score": "candidates.score/rank and per-event f0 are null until milestone 5; "
-                                             "score.tif holds the interim cascade-consistency value"},
+        "human_in_loop": False, "manual_inputs": manual_inputs(cfg, args),
+        "milestone": 5, "score": {"definition": "pooled mean Huber loss of ridge residuals in ridge-scatter units; "
+                                                "one shared Δt, one f0 per event; lower is better; "
+                                                "cell score = best point inside the cell when score.refine_in_cell",
+                                  "interim_columns": "interim_rank/interim_cost = cascade consistency, for comparison"},
         "inputs": {"audio": audio_path, "tracks": tracks_path, "registry": registry, "truth": truth_path,
                    "region": region_name, "dem": section(cfg, "dem").get("path"), "geoid": geoid.source},
         "search": {"mode": mode, "grid_crs": spec.crs.to_string(), "spacing_m": spec.spacing_m,
@@ -708,10 +759,17 @@ def cmd_locate(args) -> int:
     print("  survivors: " + " -> ".join(f"{k} {counts[k]:,}" for k in cascade.STAGES)
           + f"  (silence removed {info['silence_removed']})")
     if truth_eval:
-        print(f"  true cell: reached {true_stage}; interim rank {truth_eval['interim_rank']}; "
-              f"rank-1 error {truth_eval['interim_rank1_error_m'] and round(truth_eval['interim_rank1_error_m'])} m")
+        print(f"  true cell: reached {true_stage}; rank {truth_eval['rank']} of {len(surv)} "
+              f"(interim {truth_eval['interim_rank']}); rank-1 error "
+              f"{truth_eval['rank1_error_m'] and round(truth_eval['rank1_error_m'])} m; "
+              f"assignment correct: {truth_eval['true_cell_assignment_correct']}")
+    for d in surv[:3]:
+        print(f"  #{d['rank']} {d['est_lat']:.5f},{d['est_lon']:.5f} score {d['score']:.3f} Δt {d['dt_s']:+.2f}s "
+              f"tracks {[str(ts.icao24[k_]) for k_ in d['tracks']]} rms {np.round(d['rms'], 2).tolist()} Hz")
+    if info["manual_inputs"]:
+        print(f"  NOTE: manual inputs used {sorted(info['manual_inputs'])}: not a fully automated run")
     print(f"  time {timings['total_s']:.1f}s (events {timings['events_s']:.1f}, cascade "
-          f"{sum(stage_s.values()):.2f}); disk {(fp['total_bytes'] + fp['run_json_bytes']) / 1e6:.2f} MB -> {run_dir}")
+          f"{sum(stage_s.values()):.2f}, score {timings['score_s']:.2f} for {n_scored} hypotheses); disk {(fp['total_bytes'] + fp['run_json_bytes']) / 1e6:.2f} MB -> {run_dir}")
     return 0
 
 

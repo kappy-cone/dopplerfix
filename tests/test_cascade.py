@@ -240,3 +240,60 @@ def test_tile_size_does_not_change_survivors():
     a, _, _ = run(sc, ev, p=cs.CascadeParams.from_dict({**P.__dict__, "tile_cells": 7}))
     b, _, _ = run(sc, ev, p=cs.CascadeParams.from_dict({**P.__dict__, "tile_cells": 64}))
     assert a == b
+
+
+# ---------------------------------------------------------------------------
+# Milestone 5: locked scoring ranks the true cell first (truth-derived ridges, no audio analysis)
+# ---------------------------------------------------------------------------
+def ridge_events(sc, noise_hz=0.1, seed=0):
+    """ObservedEvents whose ridges come from the general model at the true mic, plus noise and the truth f0."""
+    from doppler import physics as ph
+
+    rng = np.random.default_rng(seed)
+    out = truth_events(sc)
+    ev_enu = [e for e, s in zip(sc.track_enu, sc.specs) if s.role == "event"]
+    t_track = sc.track_time_rel()
+    res = []
+    for e, enu, tru in zip(out, ev_enu, sc.truth):
+        tr = np.arange(max(0.0, tru.t_cpa_received_rel_s - 60), min(sc.params.duration_s, tru.t_cpa_received_rel_s + 60), 0.1)
+        ratio, _, _ = ph.predicted_ratio_at(tr, t_track, enu, sc.mic_enu, C)
+        f = tru.f0_hz * ratio + rng.normal(0, noise_hz, len(tr))
+        res.append(cs.ObservedEvent(**{**e.__dict__, "ridge_t_s": tr, "ridge_f_hz": f,
+                                       "ridge_w": np.full(len(tr), 1 / noise_hz ** 2)}))
+    return res
+
+
+@pytest.mark.parametrize("seed,duration,times,classes", [
+    (0, 120.0, (30.0, 90.0), None),
+    (1, 60.0, (15.0, 45.0), None),
+    (2, 240.0, (60.0, 180.0), ("prop", "jet")),
+    (4, 180.0, (30.0, 90.0, 150.0), None),
+])
+def test_true_cell_ranks_first_after_locked_scoring(seed, duration, times, classes):
+    from doppler import score
+
+    sc = scenario(seed, duration, times, classes)
+    ev = ridge_events(sc)
+    prep = prepared_tracks(sc)
+    prior = cs.dt_prior_from("known", START, None, 10.0, duration)
+    ts = tracks.build_trackset(prep, START - 120, START + duration + 60, 0.25)
+    spec = geo.make_grid_spec(region_circle(), 200.0, P.tile_cells)
+    cells, true_id = [], None
+    from pyproj import Transformer
+    tx, ty = Transformer.from_crs("EPSG:4326", spec.crs, always_xy=True).transform(sc.mic_lon, sc.mic_lat)
+    true_id = int(spec.cell_ids(int(np.floor(tx / 200.0)), int(np.floor(ty / 200.0))))
+    for r in cs.iter_cascade(spec, ev, ts, prior, geo.FlatDEM(1600.0), 1.5, C, P):
+        for h in np.flatnonzero(r.silence):
+            cid = int(spec.cell_ids(r.tile.i[h], r.tile.j[h]))
+            hyps = [cs.Hypothesis(cid, tuple(int(k) for k in r.hypotheses.tracks[q]),
+                                  (float(r.hypotheses.dt_lo_s[q]), float(r.hypotheses.dt_hi_s[q])))
+                    for q in np.flatnonzero(r.hypotheses.cell == h)]
+            cells.append((cid, r.tile.xyz[h], hyps))
+    assert any(cid == true_id for cid, _, _ in cells)
+    sp = score.ScoreParams.from_dict(CFG["score"])
+    ranked = score.rank_cells(ev, cells, ts, START, C, sp, (prior.dt_lo_s, prior.dt_hi_s), 100.0)
+    assert ranked[0].cell_id == true_id, [(r.cell_id == true_id, round(r.best.cost, 3)) for r in ranked[:5]]
+    assert np.linalg.norm(ranked[0].xyz_est - sc.mic_ecef) < 60.0
+    assert abs(ranked[0].best.dt_s) < 0.3               # scenario clock is exact
+    ev_icao = {t.icao24 for t in sc.truth}
+    assert {str(ts.icao24[k]) for k in ranked[0].best.assignment} == ev_icao
