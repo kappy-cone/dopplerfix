@@ -992,3 +992,126 @@ Phase 4), U17 (Stage A now; Stage B only if the pilot shows ≤ 4 min per scenar
 - **OpenSky fallback (user, session 4):** if Trino historical access has not been granted by the time it
   is needed (P4.3 / P5.2), use the OpenSky datasets at https://opensky-network.org/data/scientific
   instead.
+
+---
+
+## 8. Amendment after Stage A (session 5): accuracy first, real data earlier, efficiency last
+
+Written after `reports/stageA.md` (Stage A, all-on C n = 50, every config). The user set the priority order:
+accuracy and functionality first, cost second. Nothing here changes a phase's content, a settled decision
+(§4, §7), the V0/V1 comparison, the pre-registered re-ordering rule (§3.0, applied: written order, Phase 1
+next) or the registry rule (P0.7). Phase 4 stays at full scale.
+
+### 8.0 What Stage A changes
+1. **Accuracy is low, and "unique" cannot be trusted.** All-on C:
+   - V1: 7 / 50 correct, 7 confident-wrong. Only 7 of its 16 unique answers are right (44 %).
+   - V1-asdesigned: 12 correct, 12 confident-wrong (12 / 27 unique right, also 44 %).
+   - V0: 2 / 50.
+   - Clean: 4 / 5.
+2. **The provisional `inconsistent` status adds no information.** Against V1-asdesigned, which has the same
+   rank-1 answers on 11 of its 12 correct seeds, it removed 5 correct and 5 confident-wrong answers alike.
+   Precision of unique stays at 44 %; only the answer rate drops (27 → 16 / 50). Per the registry rule its
+   threshold is not moved. P1.1 + P1.4 replace it and must beat it (8.3, U18).
+3. **Detection sits at a cliff edge** (main-session check, 10 seeds, `reports/experiments/pathcheck/`).
+   Synthetic events reach the detector at about 0–12 dB band SNR, many at 1–3 dB (the realism layer resamples
+   each event to ≥ 0 dB, `realism.event_min_snr_db`). A ~1 dB change flips detection:
+
+   | config | truth events detected |
+   |---|---|
+   | all-on | 19 / 20 |
+   | sub:cwind | 17 / 20 |
+   | sub:reflection | 14 / 20 |
+   | loo:path | 10 / 20 |
+
+   Stage A's `loo:path` "8 / 20 seeds detect nothing" is this effect, not a generator bug: ground reflection
+   adds coherent energy, and the flat absorption model attenuates low harmonics more than ISO 9613 does.
+   Consequences:
+   - the "survival" failure classes mix detection losses with cascade kills;
+   - leave-one-out deltas partly measure detection flips, not localization.
+4. **Failures split three ways** (V1): survival at CPA 37 %, discrimination 37 %, bias 20 %. No single fix
+   dominates, so the Phase 1 measurements, not a prior guess, should steer Phases 2–3.
+5. **Compute is not the constraint at this scale.**
+   - A full Stage A (V0 + V1, 275 units) took about 70 min on the PC (`--jobs 8`).
+   - Scoring is about 95 % of V1's time.
+   - Hypothesis explosions (up to 69,348 per clip) cause the timeouts: 2 / 50 all-on V1, which count as
+     failures. So speed is a functionality issue only through timeouts.
+6. **V0 (strict) is non-functional under realism.** 2 / 50, and the fallback arms don't beat V1. It stays a
+   kept, cheap comparison arm (user requirement) but gets no variant-specific development.
+
+### 8.1 Measurement fixes before any Phase 1 comparison (reporting only; settled)
+- **Detection recall** per config: truth events detected / truth events. Already in rows as
+  `truth_events_detected`.
+- **A `detection` failure class**, reported beside the pre-registered taxonomy (the rule itself is
+  unchanged): a run whose truth events were not all detected. That separates "the detector never saw it" from
+  "the cascade killed it".
+- **Conditional accuracy:** outcome tiers on runs where every truth event was detected, next to the
+  unconditional figures. Localization changes are judged mainly on this; detection changes on recall.
+- **Rank-1 accuracy ignoring status** (right pair and ≤ 200 m, whatever the label). This is the localization
+  baseline that status changes must not lower: V1 ≈ 14 / 50 (7 correct + 7 labelled inconsistent).
+- **Answer rate** (unique / runs) as a headline, next to precision of unique and correct rate.
+- **Paired continuous tests** (rank-1 error, true-assignment rank, Δcost), which plan §3.0 already specifies.
+  Stage A did not run them yet.
+- **Hand-check ≥ 5 Stage A rows** against their kept truth and events before relying on these metrics.
+- All of the above is re-summarised from the existing Stage A rows: no re-run.
+
+### 8.2 Detection becomes an explicit accuracy item (new; USER U19)
+A detection miss caps accuracy no matter what Phases 1–3 do. Candidate algorithmic changes, none of which
+moves `detect.trigger_db` or any other provisional threshold:
+- a harmonic-summed tonal statistic (prop harmonic stacks, as `ridge.doppler_hough` already sums for seeding);
+- a long-window (2–4 s) spectrogram pass for slow props (the doppler.txt "increase the resolution" step);
+- a lower-band pass below the 100 Hz recording high-pass.
+
+Measured on detection recall per config, paired, with clean and all-on. Also checked against false events
+(the spurious-event count is in rows), because more detections mean more hypotheses and more discrimination
+risk. The detection thresholds themselves are calibrated only on milestone 4.5 field recordings.
+
+### 8.3 Order
+1. 8.1 measurement fixes (re-summarise Stage A) and the hand-check.
+2. **Phase 1**, as written. Acceptance for P1.1/P1.4 (U18): precision of unique above the status-ignored
+   baseline (44 %), with rank-1 accuracy not lower, and answer rate reported.
+3. **8.2 detection** (if U19 approves), alongside Phase 1, because it acts on a different stage.
+4. **Real data:** P4.3 real-traffic replay and P5.3 UAT coverage straight after Phase 1, and **field
+   recordings requested now**. Stage A raises their priority: detection and the audibility levels can only
+   be calibrated on real audio, and the synthetic level model is what puts events on the detection cliff.
+   Minimum useful set: a few clips near a small airport, GPS location, accurate clock, ≥ 2 audible prop
+   flyovers each. Data: Trino if granted, else https://opensky-network.org/data/scientific. Reported, never
+   used to tune provisional values.
+5. Phase 2 ladder → Phase 3 → milestone 6 → Phase 4 → Phase 5.
+6. **Efficiency** is done only where it serves accuracy or functionality:
+   - profile `score.rank_cells`, because hypothesis explosions cause timeouts;
+   - identical-result speed-ups are adopted only if they reproduce Stage A rows exactly on ≥ 5 seeds;
+   - result-changing speed-ups (top-K hypotheses per cell, a lower cap) are measured arms and the user decides.
+
+### 8.4 Experiment design (accuracy over cost)
+- **Stage A is the reference.** Later comparisons run only the new arm, paired by seed. This is valid while the
+  V0/V1 code paths are unchanged; rows record commit and config hash.
+- **Decision runs use the full config set**, because a full Stage A costs about 70 min. Bigger n where a
+  decision rests on it: all-on C n = 100 (seeds 0–99) for Phase 1 acceptance. Stage A showed n = 20 per LOO
+  config cannot separate arms (wide intervals).
+- **Targeted subsets are screens only,** to rule an idea out quickly. They always include all-on + clean.
+  Groups per change:
+
+| Change | Groups beyond all-on + clean |
+|---|---|
+| R1 calibrated likelihood | source, path |
+| R2 per-hypothesis silence | scene, levels, adsb |
+| R3 unmatched-event ranking | adsb + a dropped-ADS-B config |
+| R4 silence from audio | levels, scene |
+| P3.1 track smoother | adsb |
+| P3.2 baro correction | adsb with shared-QNH baro |
+| P3.3 f0 drift | sub:rpm |
+| P3.5 tolerance restructure | geometry, source |
+| 8.2 detection | path, levels, scene, sub:reflection |
+
+- **Never re-run only the seeds that failed in Stage A** (regression to the mean, missed new failures).
+- **Screen on truth-derived ridges first** (`tests/test_cascade.ridge_events`), then the ablation.
+- **Richer rows**, so a changed metric means re-summarising, not re-running.
+
+### 8.5 New USER decisions
+- **U18 (P1.1/P1.4 acceptance):** may Phase 1's new status be adopted as the default only if, on all-on C
+  n = 100 paired with Stage A, precision of unique beats the status-ignored baseline (44 %), rank-1 accuracy
+  does not drop, and the answer rate is reported? Recommend yes. It is an acceptance test, not a threshold:
+  it tunes nothing.
+- **U19 (detection item):** add 8.2 (algorithmic detection improvements, measured on recall and false
+  events; thresholds untouched until 4.5)? It changes methodology step 2 (event detection). Recommend yes:
+  detection caps every later gain.
