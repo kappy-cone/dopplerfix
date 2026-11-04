@@ -48,7 +48,7 @@ General model (any track geometry, used for scoring): for candidate mic position
    - one global time shift Δt, applied identically to every event (absorbs CPA-time measurement error and clock offset)
    - one f0 per event (absorbs source-frequency uncertainty)
 
-   The relative timing between events comes only from the physics (track positions + propagation), and is never fitted independently per event. Score = residual between ridge and modeled curves; rank cells by combined score.
+   The relative timing between events comes only from the physics (track positions + propagation), and is never fitted independently per event. Score = residual between ridge and modeled curves (pooled mean Huber loss in units of each event's ridge scatter; ridge points the track cannot model are penalised); rank cells by combined score. A cell is scored at its best point inside its footprint (bounded search of east, north and Δt), not at its centre: the cost surface is strongly anisotropic, so a centre-only score lets a cell 300 m away along the valley beat the true cell. The refined point is the location estimate.
 9. **Outputs:** ranked cells with assigned tracks per event, Δt, and per-event f0; score raster (GeoTIFF); candidate, track, and grid layers (GeoPackage); diagnostic plots with every event's modeled curve overlaid on the spectrogram for the top candidates; per-stage survivor counts.
 
 ### Search modes
@@ -139,7 +139,7 @@ For each: whether the true location still ranks 1st, how ridge SNR and fitted pa
 3. Tracks: ADS-B ingest, interpolation, type-code prop/jet classification, event classification, ENU conversion, DEM sampling. *(done in session 2, tag milestone-3)*
 4. Cascade: grid generation, CPA prefilter, offset filter, silence filter, with stage counts. The synthetic true cell survives. (Also: geoid grids, covariance-derived tolerances, outputs contract, QGIS template, plots/viewer.) *(done in session 3)*
 4.5. Real-data calibration: known-location recordings near an airport plus OpenSky tracks; set detection, classification, and audibility thresholds.
-5. Full curve modeling + locked N-event scoring. The synthetic true cell ranks 1st.
+5. Full curve modeling + locked N-event scoring. The synthetic true cell ranks 1st. *(done in session 3; also the read-only comparison viewer)*
 6. Exports + QGIS MCP visualization.
 7. Real data: regional run, then the US-wide 1-minute benchmark.
 8. Countermeasures analysis and report.
@@ -153,6 +153,8 @@ For each: whether the true location still ranks 1st, how ridge SNR and fitted pa
 - **Harmonics:** the ridge can lock onto the wrong harmonic. f0 is free per event, so curve shape matters more than absolute frequency.
 - **Coverage gaps:** aircraft without ADS-B, or with gaps in coverage, are missing from track data. This also weakens the silence constraint, so make the silence filter's strictness configurable and report how many cells it removes.
 - **Type-code gaps:** aircraft missing from the type database get an "unknown" class, which matches either event class.
+- **Single event:** one flyover constrains the mic to a locus (right slant distance and timing along one track), so ranking among locus cells is not meaningful. Location claims need at least two events from different tracks.
+- **Grid quantization:** the 200 m grid is coarser than the score's resolution across the cost valley; always score cells by their best in-cell point (score.refine_in_cell).
 - **Turns and climbs** break the straight-line closed forms. Scoring always uses the general track-based model.
 - **Altitude source:** prefer geometric altitude; barometric altitude needs a pressure correction or a wider tolerance.
 - **Geoid:** DEM heights are converted to ellipsoidal with a real geoid model sampled from a grid in data/proj/: GEOID18 (us_noaa_g2018u0.tif, CONUS + PR), EGM96 (us_nga_egm96_15.tif) outside it. The constant `dem.geoid_undulation_m` is only a fallback when no grid is found, and logs a warning. GEOID18 is a hybrid geoid referenced to NAD83(2011), whose ellipsoid heights differ from WGS84/ITRF by ~1–2 m in CONUS; negligible at 200 m spacing but not zero. Near Boulder: GEOID18 −16.10 m, EGM96 −15.58 m. If the grids are missing, re-copy them from QGIS.app/Contents/Resources/qgis/proj/ or run `.venv/bin/pyproj sync --file us_noaa_g2018u0 --target-directory data/proj` (and `--file us_nga_egm96_15`).

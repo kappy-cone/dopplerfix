@@ -3,7 +3,12 @@
 Read CLAUDE.md first; it is authoritative for methodology and conventions. This file
 records session state, decisions, and what is fragile.
 
-## Status (end of session 3)
+## Status (session 3, latest)
+- **Milestone 5 done** (commit e181f21): locked N-event scoring with in-cell refinement; the synthetic
+  true cell ranks 1st in every multi-event scenario (table below). Read-only comparison viewer built.
+- Automation first (CLAUDE.md Operating modes): human-in-the-loop work is deferred to milestone 9.
+
+## Status (end of milestone 4)
 - Milestones 1–3 done (tag `milestone-3` = e742f5c; created in session 3).
 - **Milestone 4 done** (commit c47e618 + this handoff): streamed cascade, outputs contract, plots/viewer,
   QGIS template. The synthetic true cell survives every stage in all validation scenarios below.
@@ -120,3 +125,36 @@ cells reach the silence stage and are rejected there, that tiling (7 vs 64 cells
 and that `silence_mode: count` keeps cells.
 
 Not yet reported (CLAUDE.md Validation): sensitivity to SNR, tolerance settings, and DEM error.
+
+
+## Milestone 5 — locked scoring (synthetic, audio end-to-end via `synth` → `locate`)
+Same scenarios as the milestone-4 table. Score = pooled mean Huber loss (ridge-scatter units); each cell
+scored at its best in-cell point. Error = rank-1 refined estimate vs the true mic.
+
+| scenario | candidates | true cell rank (centre-only / interim) | rank-1 error | assignment | score time | run time | run disk |
+|---|---|---|---|---|---|---|---|
+| A 600 s, 2 events | 22 | **1** (2 / 2) | 52 m | correct | 5.4 s | 18.7 s | 2.02 MB |
+| B 600 s, seed 1 | 18 | **1** (– / 1) | 9 m | correct | 3.2 s | 15.7 s | 1.83 MB |
+| C 60 s, overlapping, edge-clipped | 26 | **1** (– / 1) | 3 m | correct | 4.3 s | 8.2 s | 1.39 MB |
+| D 600 s, prop + jet | 23 | **1** (– / 2) | 22 m | correct | 7.7 s | 23.0 s | 2.04 MB |
+| E 120 s, **single event** | 76 | 14 (– / 15) | 537 m | correct | 10.7 s | 16.9 s | 1.59 MB |
+| F 1000 s, 920 s apart | 26 | **1** (– / 1) | 23 m | correct | 5.9 s | 18.1 s | 1.97 MB |
+| G 300 s, three events | 21 | **1** (– / 2) | 8 m | correct | 5.4 s | 18.4 s | 2.13 MB |
+
+E is expected: one event constrains only a locus (CLAUDE.md Known pitfalls). Centre-only scoring put A's
+true cell 2nd (rank 1 was 306 m away along the cost valley); in-cell refinement fixed it. Fast tests also
+check rank 1 from truth-derived ridges in four scenarios (incl. prop+jet and three events).
+
+### Scoring notes
+- Hot spot: in-cell refinement is ~0.2 s per cell (L-BFGS-B over east, north, Δt after a 3×3 start grid;
+  ~1 ms per cost evaluation). Fine regionally; capped by `score.refine_max_cells`; profile before US-wide.
+- σ per event = the fit's ridge scatter (`noise_hz`) on raw points; the scorer uses medians of 0.5 s bins, so
+  absolute scores are smaller than a strict χ² would be. Ranking is unaffected; revisit if scores are ever
+  turned into likelihoods or confidences.
+- Mic height during refinement stays at the cell's DEM sample (terrain slope inside a cell is ignored).
+- viewer.html live score matches the scorer to ~0.2% (it interpolates the modeled curve on a 0.25 s grid).
+- Snapshot logs in the viewer are download-only (read-only diagnostics; nothing feeds back into a run).
+
+### Not done yet
+- Synthetic sensitivity to SNR, tolerance settings, and DEM error (CLAUDE.md Validation).
+- No ambiguity/confidence measure: a single-event or otherwise degenerate clip still returns a rank 1.
