@@ -179,6 +179,20 @@ cascade:
   silence_hard_prob: 0.99       # reject a cell when an unexplained pass is audible with at least this probability
   max_unmatched_events: 1       # events allowed without a track (cars, birds, aircraft without ADS-B)
   silence_explain: cpa        # cpa: an audible pass is explained only by a CPA-consistent pass of that track | time: by any compatible event in time (lenient)
+  # Phase 0 (reports/combined_plan.md P0.1-i). A-priori values, set before any measurement (P0.7):
+  max_event_radius_m: 12000.0   # PROVISIONAL; source: 2 × the largest audible slant. Caps an event's CPA search radius
+  weak_event_rel_sigma: 0.5     # PROVISIONAL; source: arbitrary. σ_d/d above this: scored, doesn't gate pruning (V0: null)
+  max_partial_per_cell: 16      # PROVISIONAL; source: arbitrary. Partial (≥ 1 unmatched) hypotheses per cell
+  enum_budget_per_cell: 5000    # PROVISIONAL; source: arbitrary. Best-first enumeration budget per cell
+
+# Named design variants (HANDOFF "Two design variants"; reports/combined_plan.md P0.0). An overlay is
+# deep-merged onto this file by `cli.py locate --variant NAME` and by the ablation driver. The base file
+# is V1. Both variants are kept and compared side by side; the as-designed code is tagged
+# `variants-asdesigned`.
+variants:
+  V0:                        # original strict design (milestones 4-5): every event matched, hard silence
+    cascade: {max_unmatched_events: 0, silence_audibility: hard, weak_event_rel_sigma: null}
+  V1: {}                     # current robust default: <= 1 unmatched event (lexicographic), probabilistic silence
 
 score:                       # locked N-event scoring: one shared Δt, one f0 per event
   dt_coarse_step_s: 0.5      # coarse Δt grid over each hypothesis' feasible interval, then bounded refinement
@@ -192,9 +206,17 @@ score:                       # locked N-event scoring: one shared Δt, one f0 pe
   refine_dt_window_s: 3.0    # Δt half-width around the centre's Δt while refining
   silence_weight: 1.0        # probabilistic-silence penalty (nats) added to the pooled loss
   ambiguity_rel: 0.15        # PROVISIONAL: candidates within 15% of the best score are tied
+  inconsistent_rms_sigma: 3.0  # PROVISIONAL (P0.4; source: 3σ convention): rank-1 rms > this × model-free ridge scatter -> "inconsistent"
   ambiguity_radius_m: 400.0  # tied set within this of rank 1 -> unique, else ambiguous
   allow_shared_tracks: false # forbid assigning one aircraft to two events
   max_hypotheses_per_cell: 64
+
+# Validation (doppler/evaluate.py; user decision U10). Fixed now, before any Phase 0 baseline result.
+evaluate:
+  success_radius_m: 200.0    # headline estimate within this of the truth (does not follow grid.spacing_m)
+  confident_wrong_m: 1000.0  # "unique" and farther than this: confident-wrong
+  match_tol_s: 10.0          # truth event <-> detected event, by received CPA time
+  hop_ratio_tol: 0.015       # harmonic-hop diagnostic: ridge/model ratio this close to a simple ratio ≠ 1
 
 outputs:
   root: outputs

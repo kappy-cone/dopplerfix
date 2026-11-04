@@ -29,6 +29,32 @@ def test_modeled_ratio_matches_physics_predicted_ratio():
     np.testing.assert_allclose(te + r / 343.0, t_rx, atol=1e-6)
 
 
+def test_modeled_ratio_valid_up_to_segment_end_in_received_time():
+    """P0.1a: a received time past the segment end whose emission time is inside the data is modellable.
+
+    The old Newton seed sampled the track at the received time (NaN past the end), so the last r/c
+    seconds of every segment were wrongly 'unmodellable' and paid the fixed penalty.
+    """
+    t = np.arange(0, 120, 0.25)
+    enu = np.c_[70 * (t - 60), np.full_like(t, 800.0), 900 + 0 * t]
+    tr = tracks.Track.from_enu("a", "A", START + t, enu, FRAME)
+    tr.vel_enu = np.c_[np.full_like(t, 70.0), np.zeros_like(t), np.zeros_like(t)]
+    ts = tracks.build_trackset([tr], START - 50, START + 200, 0.25)
+    mic = FRAME.enu_to_ecef(np.array([0.0, 0.0, 1.5]))
+    end = START + t[-1]
+    # range at the end ≈ sqrt(4200² + 800² + 900²) ≈ 4.37 km -> delay ≈ 12.7 s
+    t_rx = end + np.array([1.0, 5.0, 10.0])
+    ratio, te, r, ok = score.modeled_ratio(mic, 0, ts, t_rx, 343.0)
+    assert ok.all() and (te <= end).all()
+    np.testing.assert_allclose(te + r / 343.0, t_rx, atol=1e-6)
+    # well past the end (emission time outside the data): invalid, not extrapolated
+    _, _, _, ok2 = score.modeled_ratio(mic, 0, ts, np.array([end + 30.0]), 343.0)
+    assert not ok2.any()
+    # before the start: the emission time is earlier still, so invalid
+    _, _, _, ok3 = score.modeled_ratio(mic, 0, ts, np.array([START - 1.0]), 343.0)
+    assert not ok3.any()
+
+
 def test_profile_f0_closed_form():
     rho = np.linspace(1.1, 0.9, 50)
     assert score.profile_f0(133.0 * rho, rho) == pytest.approx(133.0)

@@ -4,7 +4,7 @@ import dataclasses
 import pytest
 
 import cli
-from doppler import audio, cascade, classify, detect, fit, realism, ridge, score, synth, tracks
+from doppler import audio, cascade, classify, detect, evaluate, fit, realism, ridge, score, synth, tracks
 
 CFG = cli.load_config("config.yaml")
 
@@ -21,6 +21,7 @@ SECTIONS = [
     ("cascade", cascade.CascadeParams, {"allow_shared_tracks", "max_hypotheses_per_cell"}),  # from score:
     ("score", score.ScoreParams, set()),
     ("realism", realism.RealismParams, set()),
+    ("evaluate", evaluate.EvalParams, set()),
 ]
 
 
@@ -48,3 +49,49 @@ def test_provisional_thresholds_are_marked():
 
 def test_no_fixed_percentage_cascade_tolerances():
     assert not {k for k in CFG["cascade"] if k.endswith("_frac")}
+
+
+def _keys(d, prefix=""):
+    for k, v in d.items():
+        if isinstance(v, dict) and v:
+            yield from _keys(v, f"{prefix}{k}.")
+        else:
+            yield f"{prefix}{k}"
+
+
+@pytest.mark.parametrize("name", sorted(CFG["variants"]))
+def test_variant_overlays_only_touch_existing_keys(name):
+    """A typo in an overlay would silently do nothing: every overlay key must exist in the base config."""
+    base = set(_keys(CFG))
+    over = set(_keys(CFG["variants"][name] or {}))
+    assert over <= base, f"variant {name} sets unknown keys {sorted(over - base)}"
+
+
+def test_variant_resolution():
+    v0 = cli.apply_variant(CFG, "V0")
+    v1 = cli.apply_variant(CFG, "V1")
+    assert v0["variant"] == "V0" and v1["variant"] == "V1"
+    assert v0["cascade"]["max_unmatched_events"] == 0 and v0["cascade"]["silence_audibility"] == "hard"
+    # V1 is the base file; the overlay merge leaves unrelated keys alone
+    assert {k: v for k, v in v1.items() if k != "variant"} == CFG
+    assert v0["cascade"]["n_sigma"] == CFG["cascade"]["n_sigma"]
+    with pytest.raises(SystemExit):
+        cli.apply_variant(CFG, "nope")
+
+
+def test_config_provenance_reports_overrides(tmp_path):
+    """P0.1h: an edited tolerance shows up in config_overrides; a named variant does not."""
+    import copy
+
+    import yaml
+
+    same = cli.config_provenance(CFG, "config.yaml")
+    assert same["config_overrides"] == {} or same["committed_sha256"] != same["sha256"]
+    v0 = cli.apply_variant(CFG, "V0")
+    assert "cascade.max_unmatched_events" not in (cli.config_provenance(v0, "config.yaml")["config_overrides"] or {})
+    edited = copy.deepcopy(CFG)
+    edited["cascade"]["n_sigma"] = 2.5
+    p = tmp_path / "edited.yaml"
+    p.write_text(yaml.safe_dump(edited))
+    prov = cli.config_provenance(edited, p)
+    assert prov["config_overrides"]["cascade.n_sigma"] == [CFG["cascade"]["n_sigma"], 2.5]

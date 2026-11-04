@@ -64,3 +64,67 @@ def test_realistic_scenario_records_its_departures():
     assert 1.0 <= sc.mic_enu[2] + FRAME.h0 - 1600.0 <= 10.0
     ev = sc.aircraft_info[sc.event_specs[0].icao24]
     assert ev["peak_band_snr_db"] >= rp.event_min_snr_db - 1e-6
+
+
+# ---------------------------------------------------------------------------
+# P0.2: independent random streams (paired leave-one-group-out ablations)
+# ---------------------------------------------------------------------------
+def test_ablation_groups_partition_every_realism_field():
+    import dataclasses
+
+    names = [n for g in rl.ABLATION_GROUPS.values() for n in g]
+    assert len(names) == len(set(names))
+    assert set(names) == {f.name for f in dataclasses.fields(rl.RealismParams)}
+    for sub in rl.ABLATION_SUBGROUPS.values():
+        assert set(sub) <= set(names)
+
+
+def _all_on():
+    import cli
+
+    return rl.RealismParams.from_dict(cli.load_config("config.yaml")["realism"])
+
+
+def _draws(sc, kind):
+    return {k: v.get(kind) for k, v in sc.aircraft_info.items() if v.get(kind) is not None}
+
+
+@pytest.mark.parametrize("group", ["adsb", "levels", "source", "path", "scene", "geometry"])
+def test_toggling_one_group_does_not_shift_other_groups_draws(group):
+    """Every hidden draw of the other groups is identical with ``group`` off, per aircraft."""
+    p = synth.SynthParams(seed=7, duration_s=60, event_rx_times_s=(15.0, 45.0), n_background=4)
+    on = synth.make_scenario(p, FRAME, START, 1600.0, 343.4, realism=_all_on())
+    off = synth.make_scenario(p, FRAME, START, 1600.0, 343.4, realism=rl.without(_all_on(), group))
+    common = set(on.aircraft_info) & set(off.aircraft_info)
+    assert {s.icao24 for s in on.event_specs} <= common
+    if group != "geometry":           # geometry moves events, so non-event placement may legitimately change
+        assert set(on.aircraft_info) == set(off.aircraft_info)
+        assert np.allclose(on.mic_enu, off.mic_enu)
+    if group not in ("source", "levels", "path"):
+        src_on, src_off = _draws(on, "source"), _draws(off, "source")
+        for k in common & set(src_on) & set(src_off):
+            assert src_on[k] == src_off[k], (group, k)
+    if group == "levels":             # the level offset is the levels group's own draw; the rest must hold
+        for k in common:
+            a, b = on.aircraft_info[k]["source"], off.aircraft_info[k]["source"]
+            assert {x: y for x, y in a.items() if x != "level_offset_db"} == \
+                   {x: y for x, y in b.items() if x != "level_offset_db"}, k
+    if group != "geometry":
+        kin_on, kin_off = _draws(on, "kinematics"), _draws(off, "kinematics")
+        assert all(kin_on[k] == kin_off[k] for k in common if k in kin_on and k in kin_off)
+    if group != "adsb":
+        for k in common & set(on.adsb_info) & set(off.adsb_info):
+            a, b = on.adsb_info[k], off.adsb_info[k]
+            assert a.get("time_bias_s") == b.get("time_bias_s") and a.get("baro_offset_m") == b.get("baro_offset_m")
+    if group not in ("path",):
+        assert on.wind_enu == off.wind_enu and on.c_true == off.c_true
+    if group != "geometry":
+        assert on.stated_start_s == off.stated_start_s
+
+
+def test_realistic_scenario_records_hidden_draws():
+    p = synth.SynthParams(seed=7, duration_s=60, event_rx_times_s=(15.0, 45.0), n_background=4)
+    sc = synth.make_scenario(p, FRAME, START, 1600.0, 343.4, realism=_all_on())
+    ev = sc.aircraft_info[sc.event_specs[0].icao24]
+    assert {"ramp_frac", "twin_detune", "directivity_db", "reflection"} <= set(ev["source"])
+    assert {"climb_mps", "accel_frac", "turn_rate_deg_s"} <= set(ev["kinematics"])

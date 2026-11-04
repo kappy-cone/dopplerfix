@@ -3,8 +3,8 @@
 Everything is streamed tile by tile: :func:`iter_cascade` yields one
 :class:`TileResult` per active tile, so the full grid never exists in memory
 (or on disk). Spatial pruning uses cKDTrees over track samples near each
-event's time; tiles with no samples in reach of *every* event are skipped
-before their DEM window is even read.
+event's time; tiles with no samples in reach of enough events (every gating
+event but ``max_unmatched_events``) are skipped before their DEM window is read.
 
 Time model. The nominal recording start is ``S`` (known mode: the clip's
 stated UTC start). The true start is ``S + Δt`` with Δt inside the prior
@@ -17,7 +17,6 @@ over candidate passes, for any number of events.
 """
 from __future__ import annotations
 
-import itertools
 import logging
 import time
 from dataclasses import dataclass, field, fields
@@ -62,6 +61,10 @@ class CascadeParams:
     silence_level_sigma_db: float = 6.0  # PROVISIONAL: source-level scatter around the class audibility threshold
     silence_hard_prob: float = 0.99      # probabilistic: reject only when P(audible) of an unexplained pass ≥ this
     max_unmatched_events: int = 1        # events allowed without a track (non-aircraft sources, no ADS-B)
+    max_event_radius_m: float = 12000.0  # PROVISIONAL cap on an event's CPA search radius (2 × largest audible slant)
+    weak_event_rel_sigma: float | None = None  # σ_d/d above this: event scored but doesn't gate pruning (None: off)
+    max_partial_per_cell: int = 16       # hypotheses leaving ≥ 1 event unmatched, per cell (separate from the full cap)
+    enum_budget_per_cell: int = 5000     # best-first enumeration: candidate combinations examined per cell
     allow_shared_tracks: bool = False    # from score.allow_shared_tracks
     max_hypotheses_per_cell: int = 64    # from score.max_hypotheses_per_cell
 
@@ -269,7 +272,7 @@ class EventIndex:
 
 def build_event_index(ev: ObservedEvent, tol: Tolerances, ts: TrackSet, prior: DtPrior, c: float,
                       p: CascadeParams) -> EventIndex:
-    radius = ev.d_m + tol.d_for(True, p.baro_alt_tol_m).item()
+    radius = min(ev.d_m + tol.d_for(True, p.baro_alt_tol_m).item(), p.max_event_radius_m)
     t = ts.t_s
     lo = prior.start_s + ev.t_rx_s + prior.dt_lo_s - tol.t_rx_s - radius / c - p.window_pad_s
     hi = prior.start_s + ev.t_rx_s + prior.dt_hi_s + tol.t_rx_s + p.window_pad_s
@@ -403,29 +406,66 @@ def required_matched(n_events: int, p: CascadeParams) -> int:
     return max(1, n_events - p.max_unmatched_events)
 
 
-def cells_with_all_events(passes: PassTable, n_cells: int, n_events: int, required: int | None = None) -> NDArray:
-    """(M,) True where at least ``required`` events (default: all) have a surviving pass."""
+def gating_events(events: Sequence[ObservedEvent], p: CascadeParams) -> NDArray:
+    """(N,) True for events that gate pruning (CPA, offset, tile reach).
+
+    With ``weak_event_rel_sigma`` set, an event whose CPA distance is poorly constrained (σ_d/d above it) is
+    still matched and scored, but a cell need not have a pass for it. If every event is weak, all gate.
+    """
+    n = len(events)
+    if p.weak_event_rel_sigma is None or n == 0:
+        return np.ones(n, bool)
+    rel = np.array([float(e.sigma[1]) / max(float(e.d_m), 1.0) for e in events])
+    g = ~(rel > p.weak_event_rel_sigma)
+    return g if g.any() else np.ones(n, bool)
+
+
+def required_gating(gating: NDArray, p: CascadeParams) -> int:
+    """Gating events that must have a consistent pass: all but ``max_unmatched_events`` (at least one)."""
+    return max(1, int(np.sum(gating)) - p.max_unmatched_events)
+
+
+def cells_with_all_events(passes: PassTable, n_cells: int, n_events: int, required: int | None = None,
+                          gating: NDArray | None = None) -> NDArray:
+    """(M,) True where at least ``required`` gating events (default: all events) have a surviving pass."""
     have = np.zeros((n_cells, n_events), bool)
     have[passes.cell, passes.event] = True
-    return have.sum(axis=1) >= (n_events if required is None else required)
+    if gating is not None:
+        have = have[:, np.asarray(gating, bool)]
+    return have.sum(axis=1) >= (have.shape[1] if required is None else required)
 
 
 # ---------------------------------------------------------------------------
 # Stage 5: inter-event offset filter (shared Δt) + hypotheses
 # ---------------------------------------------------------------------------
 def offset_filter(passes: PassTable, n_cells: int, n_events: int, track_icao: NDArray, prior: DtPrior,
-                  p: CascadeParams) -> tuple[NDArray, HypothesisTable]:
-    """Cells where one Δt (inside the prior) is consistent with a pass for every event.
+                  p: CascadeParams, gating: NDArray | None = None,
+                  stats: dict | None = None) -> tuple[NDArray, HypothesisTable]:
+    """Cells where one Δt (inside the prior) is consistent with a pass for every gating event.
 
     Feasible Δt set per cell = ∩_events ∪_passes [dtc − tol, dtc + tol] ∩ prior. If it is
     non-empty it contains some pass's left end, so only those points are tested
-    (vectorized). Hypotheses (one pass per event, distinct aircraft unless
-    ``allow_shared_tracks``) are then enumerated for surviving cells only.
+    (vectorized). Up to ``max_unmatched_events`` gating events may lack a pass; non-gating (weak)
+    events may always stay unmatched.
+
+    Hypotheses (one pass or "unmatched" per event, distinct aircraft unless ``allow_shared_tracks``)
+    are then enumerated per surviving cell best-first, in increasing Σ(z_v² + z_d²) (an unmatched event
+    costs 9, i.e. a 3σ miss), so the caps keep the most consistent assignments: at most
+    ``max_hypotheses_per_cell`` fully matched and ``max_partial_per_cell`` partial ones, after at most
+    ``enum_budget_per_cell`` examined combinations. ``stats`` (if given) receives cap / budget hit counts.
     Returns (keep mask over cells, hypotheses).
     """
+    import heapq
+
     keep = np.zeros(n_cells, bool)
+    if stats is not None:
+        stats.setdefault("cells_full_cap", 0)
+        stats.setdefault("cells_partial_cap", 0)
+        stats.setdefault("cells_budget", 0)
     if len(passes) == 0:
         return keep, HypothesisTable.empty(n_events)
+    gating = np.ones(n_events, bool) if gating is None else np.asarray(gating, bool)
+    need = required_gating(gating, p)
     a = np.maximum(passes.dt_center_s - passes.tol_t_s, prior.dt_lo_s)
     b = np.minimum(passes.dt_center_s + passes.tol_t_s, prior.dt_hi_s)
     o = np.argsort(passes.cell, kind="stable")
@@ -442,31 +482,57 @@ def offset_filter(passes: PassTable, n_cells: int, n_events: int, track_icao: ND
     inside = (a[pp] <= x + 1e-9) & (x <= b[pp] + 1e-9)
     covered = np.zeros((len(passes), n_events), bool)
     covered[q[inside], passes.event[pp[inside]]] = True
-    need = required_matched(n_events, p)
-    feasible_q = (covered.sum(axis=1) >= need) & (a <= b)
+    feasible_q = (covered[:, gating].sum(axis=1) >= need) & (a <= b)
     keep[np.unique(passes.cell[feasible_q])] = True
 
-    # Hypotheses for surviving cells (small sets: Python is fine here).
+    # Passes that can take part in some feasible shared Δt
+    part = np.zeros(len(passes), bool)
+    sel = inside & feasible_q[q]
+    part[pp[sel]] = True
+    pc = passes.z_v ** 2 + passes.z_d ** 2
+    allow_unmatched = (~gating) | (p.max_unmatched_events > 0)
+    UNMATCHED_COST = 9.0
     rows = []
-    qi, pi = q[inside], pp[inside]
-    fe = feasible_q[qi]
-    qi, pi = qi[fe], pi[fe]
-    by_q: dict[int, list[int]] = {}
-    for qq, p_ in zip(qi.tolist(), pi.tolist()):
-        by_q.setdefault(qq, []).append(p_)
-    seen: dict[int, set] = {}
-    for qq, plist in by_q.items():
-        cell = int(passes.cell[qq])
-        per_ev = [[p_ for p_ in plist if passes.event[p_] == e] + ([-1] if p.max_unmatched_events > 0 else [])
-                  for e in range(n_events)]
-        s = seen.setdefault(cell, set())
-        if len(s) >= p.max_hypotheses_per_cell:
+    for cell in np.flatnonzero(keep).tolist():
+        idx = o[starts[cell]:ends[cell]]
+        idx = idx[part[idx]]
+        lists = []
+        for e in range(n_events):
+            ce = idx[passes.event[idx] == e]
+            ce = ce[np.argsort(pc[ce], kind="stable")]
+            ids, costs = ce.tolist(), pc[ce].tolist()
+            if allow_unmatched[e]:
+                ids.append(-1)
+                costs.append(UNMATCHED_COST)
+            lists.append((ids, costs))
+        if any(len(ids) == 0 for ids, _ in lists):
             continue
-        for combo in itertools.product(*per_ev):
-            if combo in s:
-                continue
+        n_full = n_part = pops = 0
+        first = (0,) * n_events
+        heap = [(sum(c_[0] for _, c_ in lists), first)]
+        seen = {first}
+        while heap:
+            if pops >= p.enum_budget_per_cell:
+                if stats is not None:
+                    stats["cells_budget"] += 1
+                break
+            _, ix = heapq.heappop(heap)
+            pops += 1
+            for e in range(n_events):
+                if ix[e] + 1 < len(lists[e][0]):
+                    nx = ix[:e] + (ix[e] + 1,) + ix[e + 1:]
+                    if nx not in seen:
+                        seen.add(nx)
+                        heapq.heappush(heap, (sum(lists[k][1][nx[k]] for k in range(n_events)), nx))
+            combo = tuple(lists[e][0][ix[e]] for e in range(n_events))
             cidx = [c_ for c_ in combo if c_ >= 0]
-            if len(cidx) < need or len(combo) - len(cidx) > p.max_unmatched_events:
+            if not cidx:
+                continue
+            un_gating = sum(1 for e, c_ in enumerate(combo) if c_ < 0 and gating[e])
+            if un_gating > p.max_unmatched_events or int(gating.sum()) - un_gating < need:
+                continue
+            partial = len(cidx) < n_events
+            if (partial and n_part >= p.max_partial_per_cell) or (not partial and n_full >= p.max_hypotheses_per_cell):
                 continue
             if not p.allow_shared_tracks:
                 ids = [track_icao[passes.track[c_]] for c_ in cidx]
@@ -475,13 +541,21 @@ def offset_filter(passes: PassTable, n_cells: int, n_events: int, track_icao: ND
             lo, hi = float(np.max(a[cidx])), float(np.min(b[cidx]))
             if lo > hi + 1e-9:
                 continue
-            s.add(combo)
             mid = 0.5 * (lo + hi)
             zt = (passes.dt_center_s[cidx] - mid) / passes.tol_t_s[cidx]
-            z2 = list(zt ** 2 + passes.z_v[cidx] ** 2 + passes.z_d[cidx] ** 2) + [9.0] * (len(combo) - len(cidx))
+            z2 = list(zt ** 2 + passes.z_v[cidx] ** 2 + passes.z_d[cidx] ** 2) + [UNMATCHED_COST] * (n_events - len(cidx))
             rows.append((cell, combo, lo, hi, float(np.sqrt(np.mean(z2)))))
-            if len(s) >= p.max_hypotheses_per_cell:
+            if partial:
+                n_part += 1
+            else:
+                n_full += 1
+            full_done = n_full >= p.max_hypotheses_per_cell
+            part_done = n_part >= p.max_partial_per_cell or not allow_unmatched.any()
+            if full_done and part_done:
                 break
+        if stats is not None:
+            stats["cells_full_cap"] += int(n_full >= p.max_hypotheses_per_cell)
+            stats["cells_partial_cap"] += int(n_part >= p.max_partial_per_cell)
     if not rows:
         return np.zeros(n_cells, bool), HypothesisTable.empty(n_events)
     hcell = np.array([r[0] for r in rows], np.int64)
@@ -616,6 +690,7 @@ class TileResult:
     culprit_track: NDArray         # TrackSet indices of unexplained audible passes at cells that reached silence
     silence_penalty: NDArray       # (M,) nats (probabilistic silence), added to the score
     seconds: dict
+    enum_stats: dict = field(default_factory=dict)   # hypothesis-enumeration cap / budget hits (offset_filter)
 
 
 @dataclass
@@ -626,27 +701,30 @@ class CascadeSetup:
     silence_index: SilenceIndex
     tile_origins: NDArray           # active tiles only
     n_tiles_total: int
+    gating: NDArray = None          # (N,) events that gate pruning (see gating_events)
 
 
 def prepare_cascade(spec: GridSpec, events: Sequence[ObservedEvent], ts: TrackSet, prior: DtPrior, c: float,
                     p: CascadeParams) -> CascadeSetup:
-    """Tolerances, KD-trees, and the active tiles (in reach of track samples for every event)."""
+    """Tolerances, KD-trees, and the active tiles: those in reach of class-compatible track samples for at
+    least ``required_matched`` events (all events when ``max_unmatched_events`` is 0). An event with no
+    compatible track in its window then empties the grid only when it may not stay unmatched."""
     tols = [event_tolerances(e, p, c, spec.cell_half_diag_m) for e in events]
     idx = [build_event_index(e, t, ts, prior, c, p) for e, t in zip(events, tols)]
     sil = build_silence_index(ts, prior, c, p)
+    gating = gating_events(events, p)
     origins = spec.tile_origins()
     n_total = len(origins)
     if len(origins) and events:
         centres = tile_ecef_centres(spec, origins, 0.0)
-        active = np.ones(len(origins), bool)
-        for ix in idx:
-            if ix.tree is None:
-                active[:] = False
-                break
+        n_reach = np.zeros(len(origins), np.int64)
+        for ix, g in zip(idx, gating):
+            if ix.tree is None or not g:
+                continue
             rr = ix.radius_m + spec.tile_half_diag_m + p.prune_height_margin_m
-            active &= ix.tree.query_ball_point(centres, rr, return_length=True) > 0
-        origins = origins[active]
-    return CascadeSetup(list(events), tols, idx, sil, origins, n_total)
+            n_reach += ix.tree.query_ball_point(centres, rr, return_length=True) > 0
+        origins = origins[n_reach >= required_gating(gating, p)]
+    return CascadeSetup(list(events), tols, idx, sil, origins, n_total, gating)
 
 
 def run_tile(spec: GridSpec, i0: int, j0: int, setup: CascadeSetup, ts: TrackSet, prior: DtPrior,
@@ -658,11 +736,14 @@ def run_tile(spec: GridSpec, i0: int, j0: int, setup: CascadeSetup, ts: TrackSet
     M, N = len(tile), len(setup.events)
     t0 = time.perf_counter()
     passes = cpa_prefilter(tile, setup.events, setup.indexes, ts, prior, c, p)
-    cpa = cells_with_all_events(passes, M, N, required_matched(N, p)) if N else np.zeros(M, bool)
+    gating = setup.gating if setup.gating is not None else np.ones(N, bool)
+    cpa = (cells_with_all_events(passes, M, N, required_gating(gating, p), gating) if N
+           else np.zeros(M, bool))
     passes = passes.take(np.flatnonzero(cpa[passes.cell])) if len(passes) else passes
     sec["cpa"] = time.perf_counter() - t0
     t0 = time.perf_counter()
-    offset, hyp = offset_filter(passes, M, N, ts.icao24, prior, p)
+    enum_stats: dict = {}
+    offset, hyp = offset_filter(passes, M, N, ts.icao24, prior, p, gating, enum_stats)
     best = best_hypothesis(hyp, M)
     dt = np.full(M, np.nan)
     has = best >= 0
@@ -686,7 +767,7 @@ def run_tile(spec: GridSpec, i0: int, j0: int, setup: CascadeSetup, ts: TrackSet
         culprits = np.unique(sr.culprit_track)
     sec["silence"] = time.perf_counter() - t0
     return TileResult(tile, cpa, offset, silence, passes, hyp, best, dt, n_un, n_aud, culprits,
-                      silence_penalty=sil_pen, seconds=sec)
+                      silence_penalty=sil_pen, seconds=sec, enum_stats=enum_stats)
 
 
 def iter_cascade(spec: GridSpec, events: Sequence[ObservedEvent], ts: TrackSet, prior: DtPrior,

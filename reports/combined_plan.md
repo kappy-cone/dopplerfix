@@ -989,3 +989,6 @@ Phase 4), U17 (Stage A now; Stage B only if the pilot shows ≤ 4 min per scenar
   but is not required. Each run is classed correct / abstained (ambiguous, inconsistent, locus) / wrong /
   confident-wrong, and the abstention and confident-wrong rates are reported separately. "True cell ranks
   1st" is still reported for continuity. CLAUDE.md Validation is updated when evaluate.py lands.
+- **OpenSky fallback (user, session 4):** if Trino historical access has not been granted by the time it
+  is needed (P4.3 / P5.2), use the OpenSky datasets at https://opensky-network.org/data/scientific
+  instead.

@@ -281,6 +281,16 @@ class TrackSet:
     def valid(self) -> NDArray:
         return np.isfinite(self.xyz[..., 0])
 
+    def coverage(self, k: int) -> tuple[float, float]:
+        """(first, last) valid sample time of track row ``k`` (NaN, NaN if empty). Rows are gap-free segments."""
+        cache = self.meta.setdefault("_coverage", {})
+        k = int(k)
+        if k not in cache:
+            idx = np.flatnonzero(np.isfinite(self.xyz[k, :, 0]))
+            cache[k] = ((self.t0_s + self.dt_s * idx[0], self.t0_s + self.dt_s * idx[-1]) if len(idx)
+                        else (np.nan, np.nan))
+        return cache[k]
+
     def active_between(self, t_lo: float, t_hi: float) -> NDArray:
         """(K,) tracks with any valid sample in [t_lo, t_hi]."""
         m = (self.t_s >= t_lo) & (self.t_s <= t_hi)

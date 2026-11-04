@@ -16,7 +16,7 @@ from .conftest import FRAME, START
 
 CFG = cli.load_config("config.yaml")
 P = cs.CascadeParams.from_dict({**CFG["cascade"], "tile_cells": 24})
-STRICT = dict(max_unmatched_events=0, silence_audibility="hard")   # milestone-4 semantics
+STRICT = dict(max_unmatched_events=0, silence_audibility="hard", weak_event_rel_sigma=None)   # V0 (milestone-4)
 PH = cs.CascadeParams.from_dict({**CFG["cascade"], "tile_cells": 24, **STRICT})
 C = 343.4
 
@@ -40,8 +40,8 @@ def prepared_tracks(sc):
     return prep
 
 
-def run(sc, events, p=P, spacing=200.0, targets=()):
-    prep = prepared_tracks(sc)
+def run(sc, events, p=P, spacing=200.0, targets=(), prep=None, all_tiles=True):
+    prep = prepared_tracks(sc) if prep is None else prep
     prior = cs.dt_prior_from("known", START, None, 10.0, sc.params.duration_s)
     ts = tracks.build_trackset(prep, START - 120, START + sc.params.duration_s + 60, 0.25)
     spec = geo.make_grid_spec(region_circle(), spacing, p.tile_cells)
@@ -49,7 +49,7 @@ def run(sc, events, p=P, spacing=200.0, targets=()):
     true_cell, target_cells = None, {}
     mic = sc.mic_ecef
     tgt_xyz = [FRAME.enu_to_ecef(np.array([x, y, sc.mic_enu[2]])) for x, y in targets]
-    for r in cs.iter_cascade(spec, events, ts, prior, geo.FlatDEM(1600.0), 1.5, C, p, all_tiles=True):
+    for r in cs.iter_cascade(spec, events, ts, prior, geo.FlatDEM(1600.0), 1.5, C, p, all_tiles=all_tiles):
         counts["grid"] += len(r.tile)
         counts["cpa"] += int(r.cpa.sum())
         counts["offset"] += int(r.offset.sum())
@@ -165,6 +165,59 @@ def test_offset_filter_allows_up_to_k_unmatched_events():
     assert full.min() < part.min()
 
 
+def test_enumeration_is_best_first_so_caps_keep_the_most_consistent_assignment():
+    """P0.1i: with many candidate passes per event, the cap keeps the lowest Σ(z_v² + z_d²) assignments."""
+    prior = cs.DtPrior(0.0, -10.0, 10.0, 60.0)
+    n_per = 12
+    cells, events, trk, dtc, zv = [], [], [], [], []
+    for e in range(3):
+        for j in range(n_per):
+            cells.append(0); events.append(e); trk.append(e * n_per + j); dtc.append(0.0)
+            zv.append(0.05 if j == n_per - 1 else 0.5 + 0.01 * j)    # the consistent pass is listed last
+    pt = _pass_table(cells, events, trk, dtc, 5.0)
+    pt.z_v[:] = zv
+    icao = np.array([f"a{k}" for k in range(3 * n_per)], object)
+    p = cs.CascadeParams(max_unmatched_events=0, max_hypotheses_per_cell=4)
+    stats = {}
+    keep, hyp = cs.offset_filter(pt, 1, 3, icao, prior, p, stats=stats)
+    assert keep[0] and len(hyp) == 4 and stats["cells_full_cap"] == 1
+    best = [n_per - 1, 2 * n_per - 1, 3 * n_per - 1]
+    assert hyp.tracks[np.argmin(hyp.cost)].tolist() == best
+    assert hyp.tracks[0].tolist() == best          # enumerated first
+
+
+def test_weak_events_are_scored_but_do_not_gate_pruning():
+    """P0.1i: an event with σ_d/d above weak_event_rel_sigma need not have a pass (V1); in V0 (None) it gates."""
+    prior = cs.DtPrior(0.0, -10.0, 10.0, 60.0)
+    icao = np.array(["a", "b", "c"], object)
+    ev = [cs.ObservedEvent(k, 0, 10.0 * k, 60.0, 1000.0, 100.0, np.diag([1.0, s_d ** 2, 0.1]), (5.0, 5.0),
+                           np.zeros(0), np.zeros(0), np.zeros(0)) for k, s_d in enumerate((50.0, 50.0, 900.0))]
+    pw = cs.CascadeParams(max_unmatched_events=0, weak_event_rel_sigma=0.5)
+    assert cs.gating_events(ev, pw).tolist() == [True, True, False]
+    assert cs.gating_events(ev, cs.CascadeParams(max_unmatched_events=0)).tolist() == [True, True, True]
+    pt = _pass_table([0, 0], [0, 1], [0, 1], [2.0, 2.5], 1.0)          # event 2 (weak) has no pass
+    g = cs.gating_events(ev, pw)
+    keep, hyp = cs.offset_filter(pt, 1, 3, icao, prior, pw, g)
+    assert keep[0] and hyp.tracks.tolist() == [[0, 1, -1]]
+    assert not cs.offset_filter(pt, 1, 3, icao, prior, cs.CascadeParams(max_unmatched_events=0))[0][0]
+    # a weak event with a consistent pass is still matched (and preferred: fully matched first)
+    pt3 = _pass_table([0, 0, 0], [0, 1, 2], [0, 1, 2], [2.0, 2.5, 2.2], 1.0)
+    _, h3 = cs.offset_filter(pt3, 1, 3, icao, prior, pw, g)
+    assert h3.tracks[0].tolist() == [0, 1, 2] and [0, 1, -1] in h3.tracks.tolist()
+
+
+def test_event_search_radius_is_capped():
+    ev = cs.ObservedEvent(0, 0, 30.0, 60.0, 9000.0, 100.0, np.diag([1.0, 8000.0 ** 2, 0.1]), (5.0, 5.0),
+                          np.zeros(0), np.zeros(0), np.zeros(0))
+    p = cs.CascadeParams(max_event_radius_m=12000.0)
+    tol = cs.event_tolerances(ev, p, C, 141.0)
+    assert ev.d_m + tol.d_for(True, p.baro_alt_tol_m).item() > 12000.0
+    sc = scenario(1, 60.0, (15.0, 45.0))
+    ts = tracks.build_trackset(prepared_tracks(sc), START - 120, START + 120, 0.25)
+    prior = cs.dt_prior_from("known", START, None, 10.0, 60.0)
+    assert cs.build_event_index(ev, tol, ts, prior, C, p).radius_m == 12000.0
+
+
 def test_probabilistic_silence_penalises_soft_and_rejects_near_certain():
     from scipy.stats import norm
 
@@ -251,6 +304,27 @@ def test_cascade_decoys_are_removed_by_silence(seed):
     assert true_cell[:3] == (True, True, True)
     for k, st in tcells.items():
         assert st[1] and not st[2] and st[3] >= 1, (k, st)   # reached the silence stage, rejected there
+
+
+def test_robust_variant_survives_an_event_with_no_compatible_track():
+    """P0.1b: an extra event with no class-compatible track in its window must not empty the grid when one
+    event may stay unmatched (it used to: tile pruning required reach for every event)."""
+    sc = scenario(0, 120.0, (30.0, 90.0))      # jet and unknown tracks are removed below
+    ev = truth_events(sc)
+    fake = cs.ObservedEvent(len(ev), at.class_code("jet"), 60.0, 120.0, 2000.0, 1500.0, np.diag([1.0, 50.0, 0.1]),
+                            (5.0, 5.0), np.zeros(0), np.zeros(0), np.zeros(0))
+    ev_icao = {t.icao24 for t in sc.truth}
+    prep = []
+    for t in prepared_tracks(sc):          # no jet-compatible track at all: event aircraft relabelled prop
+        if t.icao24 in ev_icao:
+            t.cls = at.class_code("prop")
+        if not at.compatible(fake.cls, np.array([t.cls]))[0]:
+            prep.append(t)
+    robust = cs.CascadeParams.from_dict({**P.__dict__, "max_unmatched_events": 1})
+    counts, true_cell, _ = run(sc, ev + [fake], p=robust, prep=prep, all_tiles=False)   # tile pruning on
+    assert true_cell is not None and true_cell[:2] == (True, True), (counts, true_cell)
+    strict, _, _ = run(sc, ev + [fake], p=PH, prep=prep)
+    assert strict["cpa"] == 0          # strict: every event must match, so nothing survives
 
 
 def test_silence_count_mode_keeps_cells_but_counts():

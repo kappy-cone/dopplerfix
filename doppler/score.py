@@ -37,6 +37,8 @@ class ScoreParams:
     silence_weight: float = 1.0            # probabilistic-silence penalty (nats) added to the pooled loss
     ambiguity_rel: float = 0.15            # PROVISIONAL: candidates within this fraction of the best score are "tied"
     ambiguity_radius_m: float = 400.0      # tied candidates all within this of rank 1 -> "unique", else "ambiguous"
+    inconsistent_rms_sigma: float = 3.0    # PROVISIONAL (P0.4; 3σ convention): rank-1 event rms above this × the
+                                           # model-free ridge scatter -> status "inconsistent" (diagnostic)
     allow_shared_tracks: bool = False      # same aircraft assigned to two events (also used by the cascade)
     max_hypotheses_per_cell: int = 64
 
@@ -125,16 +127,25 @@ def modeled_ratio(mic_xyz: NDArray, track: int, ts: TrackSet, t_rx_s: NDArray, c
 
     Solves t_e + |A(t_e) − P|/c = t_r by Newton iteration (|dr/dt|/c < 1, so it
     converges fast), then ratio = c / (c + dr/dt_e). Returns
-    ``(ratio, t_emit, range_m, valid)``; ``valid`` is False where the emission
-    time falls outside the track's data.
+    ``(ratio, t_emit, range_m, valid)``; ``valid`` is False where the converged
+    emission time falls outside the track's data.
+
+    The iteration samples the track at times clamped into its coverage, so a
+    received time past the segment end (whose emission time is r/c earlier and
+    inside the data) still converges; only the final sample is unclamped.
     """
     P = np.asarray(mic_xyz, float).reshape(1, 3)
     tr = np.asarray(t_rx_s, float)
     k = np.full(tr.shape, int(track))
-    A, _ = ts.sample(k, tr)
+    lo, hi = ts.coverage(track)
+    if not np.isfinite(lo):
+        nan = np.full(tr.shape, np.nan)
+        return nan, nan, nan, np.zeros(tr.shape, bool)
+    hi_c = max(lo, hi - 1e-6)
+    A, _ = ts.sample(k, np.clip(tr, lo, hi_c))
     te = tr - np.linalg.norm(A - P, axis=-1) / c
     for _ in range(n_iter):
-        A, V = ts.sample(k, te)
+        A, V = ts.sample(k, np.clip(te, lo, hi_c))
         rel = A - P
         r = np.linalg.norm(rel, axis=-1)
         rdot = np.einsum("...k,...k->...", rel, V) / r
@@ -359,3 +370,43 @@ def ambiguity(scores: Sequence[float], xyz: Sequence[NDArray], p: ScoreParams,
     return {"status": "unique" if spread <= p.ambiguity_radius_m else "ambiguous", "n_tied": int(len(tied)),
             "tied": tied.tolist(), "spread_m": spread,
             "gap_ratio": float(sc[1] / sc[0]) if len(sc) > 1 and sc[0] > 0 else None}
+
+
+def ridge_scatter_ref(t_s: NDArray, f_hz: NDArray, decimate_s: float = 0.5) -> float:
+    """Model-free ridge scatter σ_ref (Hz) for the absolute-fit check (P0.4).
+
+    Second differences of the decimated ridge remove the slowly varying Doppler curve. With AR(1) ridge noise
+    (lag-1 correlation ρ) var(Δ²f) = σ²(6 − 8ρ + 2ρ²) and the lag-1 autocorrelation of Δ²f is
+    (−4 + 7ρ − 4ρ² + ρ³)/(6 − 8ρ + 2ρ²); ρ is solved from the observed value and σ follows. Robust (MAD) scale.
+    """
+    t, f = np.asarray(t_s, float), np.asarray(f_hz, float)
+    ok = np.isfinite(t) & np.isfinite(f)
+    t, f = t[ok], f[ok]
+    if len(t) < 8:
+        return float("nan")
+    b = np.floor((t - t.min()) / decimate_s).astype(np.int64)
+    ub, inv = np.unique(b, return_inverse=True)
+    fd = np.array([np.median(f[inv == k]) for k in range(len(ub))])
+    d2 = np.diff(fd, 2)
+    if len(d2) < 6:
+        return float("nan")
+    mad = 1.4826 * np.median(np.abs(d2 - np.median(d2)))
+    x = d2 - d2.mean()
+    r1_obs = float(np.sum(x[1:] * x[:-1]) / max(np.sum(x * x), 1e-12))
+    rho = np.linspace(0.0, 0.95, 96)
+    den = 6 - 8 * rho + 2 * rho ** 2
+    r1 = (-4 + 7 * rho - 4 * rho ** 2 + rho ** 3) / den
+    k = int(np.argmin(np.abs(r1 - r1_obs)))
+    return float(mad / np.sqrt(den[k]))
+
+
+def absolute_fit_status(rms_hz: Sequence[float], sigma_ref_hz: Sequence[float], p: ScoreParams) -> dict:
+    """Provisional absolute-fit check on the rank-1 hypothesis: "inconsistent" if any matched event's residual
+    rms exceeds ``inconsistent_rms_sigma`` × its model-free ridge scatter. A status, not a ranking rule (D-4:
+    under realism correct and wrong answers overlap in Hz-level misfit). Unmatched events (rms NaN) are skipped."""
+    rms = np.asarray(rms_hz, float)
+    ref = np.asarray(sigma_ref_hz, float)
+    ratio = np.where(np.isfinite(rms) & np.isfinite(ref) & (ref > 0), rms / np.maximum(ref, 1e-12), np.nan)
+    bad = bool(np.nanmax(ratio) > p.inconsistent_rms_sigma) if np.isfinite(ratio).any() else False
+    return {"inconsistent": bad, "rms_over_ref": [None if not np.isfinite(r) else float(r) for r in ratio],
+            "sigma_ref_hz": [None if not np.isfinite(r) else float(r) for r in ref]}

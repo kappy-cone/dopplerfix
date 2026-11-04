@@ -302,6 +302,20 @@ def _class_ranges(p: SynthParams, cls: str):
     return p.speed_range_mps, p.alt_agl_range_m, p.f0_range_hz
 
 
+
+_STREAM_IDS = {"path": 11, "geometry": 12, "scene": 13, "levels": 14, "source": 15, "adsb": 16, "audio": 17,
+               "types": 18, "near": 19, "place": 20}
+
+
+def realism_rng(seed: int, group: str, key: str = "") -> np.random.Generator:
+    """Independent stream per (scenario seed, realism group, key) — key is usually an icao24 or a placement
+    slot. Toggling one group, or adding an aircraft, never shifts another group's or aircraft's draws
+    (P0.2: paired leave-one-group-out ablations need this)."""
+    import zlib
+
+    return np.random.default_rng([int(seed), _STREAM_IDS[group], zlib.crc32(str(key).encode())])
+
+
 def random_track_specs(rng: np.random.Generator, p: SynthParams) -> list[TrackSpec]:
     """Legacy layout: ``n_tracks`` prop events, emission CPAs spread over the recording."""
     n = p.n_tracks
@@ -373,9 +387,14 @@ def place_non_events(
     rng: np.random.Generator, p: SynthParams, events: list[TrackSpec], event_enu: list[NDArray],
     truths: list[EventTruth], mic_enu: NDArray, ground_rel: float, t_rel: NDArray, c: float,
 ) -> tuple[list[TrackSpec], list[NDArray], list[DecoyTruth]]:
-    """Decoys over each event's mirror cell, speed twins, and background traffic — all inaudible at the mic."""
+    """Decoys over each event's mirror cell, speed twins, and background traffic — all inaudible at the mic.
+
+    ``rng``: a Generator (one stream, legacy) or a callable ``slot -> Generator`` giving each placement slot
+    its own stream, so one slot's accept/reject retries don't shift the others.
+    """
     specs, enus, info = [], [], []
     far = p.inaudible_margin
+    rng_for = rng if callable(rng) and not isinstance(rng, np.random.Generator) else (lambda _k: rng)
 
     def try_place(make, role, cls, ev_idx, target=None, tries=300):
         for _ in range(tries):
@@ -406,7 +425,7 @@ def place_non_events(
 
     clip = p.duration_s
 
-    def far_anchor(cls):
+    def far_anchor(rng, cls):
         """Random point in the wider area (the search region plus an audible-threshold rim)."""
         R = p.region_radius_m + 2 * p.threshold(cls)
         ang, rad = rng.uniform(0, 2 * np.pi), R * np.sqrt(rng.uniform())
@@ -415,19 +434,22 @@ def place_non_events(
     for i, (es, enu, tru) in enumerate(zip(events, event_enu, truths)):
         mirror = mirror_point(enu, t_rel, tru.t0_rel_s, mic_enu)
         for j in range(p.n_decoys_per_event):
+            rng = rng_for(f"decoy{i}.{j}")
             cls = "prop" if rng.uniform() < 0.7 else "jet"
             if not decoy_feasible(mirror, cls):
                 info.append(DecoyTruth("", "decoy", cls, i, (float(mirror[0]), float(mirror[1])), float("nan"), None))
                 continue
             try_place(_decoy_maker(rng, p, mirror, mic_enu, cls, 10 * i + j), "decoy", cls, i, target=mirror)
         for j in range(p.n_twins_per_event):
-            try_place(lambda: _random_spec(rng, p, es.cls, "twin", 10 * i + j, far_anchor(es.cls),
+            rng = rng_for(f"twin{i}.{j}")
+            try_place(lambda: _random_spec(rng, p, es.cls, "twin", 10 * i + j, far_anchor(rng, es.cls),
                                            tru.t_cpa_received_rel_s + rng.uniform(-30, 30),
                                            speed=es.speed_mps * rng.uniform(0.97, 1.03), offset_scale=0.0),
                       "twin", es.cls, i)
     for j in range(p.n_background):
+        rng = rng_for(f"background{j}")
         cls = "prop" if rng.uniform() < 0.5 else "jet"
-        try_place(lambda: _random_spec(rng, p, cls, "background", j, far_anchor(cls),
+        try_place(lambda: _random_spec(rng, p, cls, "background", j, far_anchor(rng, cls),
                                        rng.uniform(-0.2, 1.2) * clip, offset_scale=0.0),
                   "background", cls, None)
     return specs, enus, info
@@ -487,21 +509,25 @@ def place_target_decoys(rng: np.random.Generator, p: SynthParams, targets: Seque
     return specs, enus, info
 
 
-def assign_types(rng: np.random.Generator, specs: list[TrackSpec]) -> list[TrackSpec]:
+def assign_types(rng, specs: list[TrackSpec]) -> list[TrackSpec]:
+    """Type codes for specs without one. ``rng``: a Generator or a callable ``icao24 -> Generator``."""
+    rng_for = rng if callable(rng) and not isinstance(rng, np.random.Generator) else (lambda _k: rng)
     out = []
     for s in specs:
         if not s.type_code:
             table = JET_TYPES if s.cls == "jet" else PROP_TYPES
-            s = replace(s, type_code=str(rng.choice(sorted(table))))
+            s = replace(s, type_code=str(rng_for(s.icao24).choice(sorted(table))))
         out.append(s)
     return out
 
 
-def synthetic_registry(rng: np.random.Generator, specs: list[TrackSpec], unknown_frac: float) -> pd.DataFrame:
-    """OpenSky-style registry rows (icao24, typecode, icaoaircrafttype); some aircraft left out."""
+def synthetic_registry(rng, specs: list[TrackSpec], unknown_frac: float) -> pd.DataFrame:
+    """OpenSky-style registry rows (icao24, typecode, icaoaircrafttype); some aircraft left out.
+    ``rng``: a Generator or a callable ``icao24 -> Generator``."""
+    rng_for = rng if callable(rng) and not isinstance(rng, np.random.Generator) else (lambda _k: rng)
     rows = []
     for s in specs:
-        if rng.uniform() < unknown_frac:
+        if rng_for(s.icao24).uniform() < unknown_frac:
             continue
         desc = {**PROP_TYPES, **JET_TYPES}.get(s.type_code, "")
         rows.append({"icao24": s.icao24, "typecode": s.type_code, "icaoaircrafttype": desc})
@@ -572,10 +598,14 @@ def flyover_audio(
     from . import realism as rl
 
     t_r, r, kray = received_times(enu, mic_enu, t_track_rel, c, wind_enu)
-    jitter = gaussian_filter1d(rng.standard_normal(t_track_rel.size), sigma=20.0 / p.track_dt_s)
+    if rs is not None:     # realism: independent sub-streams (jitter, RPM walk, phases, twin phases, broadband)
+        r_jit, r_rpm, r_ph, r_tw, r_bb = rng.spawn(5)
+    else:                  # clean: the legacy single stream (bit-identical scenarios)
+        r_jit = r_rpm = r_ph = r_tw = r_bb = rng
+    jitter = gaussian_filter1d(r_jit.standard_normal(t_track_rel.size), sigma=20.0 / p.track_dt_s)
     jitter *= p.f0_jitter_frac / max(np.std(jitter), 1e-12)
     if rs is not None:
-        jitter = jitter + rl.rpm_profile(rng, t_track_rel, rs, p.track_dt_s)
+        jitter = jitter + rl.rpm_profile(r_rpm, t_track_rel, rs, p.track_dt_s)
     cyc = np.concatenate([[0.0], np.cumsum(0.5 * ((1 + jitter[1:]) + (1 + jitter[:-1])) * np.diff(t_track_rel))])
     phase_e = 2 * np.pi * spec.f0_hz * cyc
     valid = (t_audio_rel >= t_r[0]) & (t_audio_rel <= t_r[-1])
@@ -630,11 +660,14 @@ def flyover_audio(
         for k, a in orders:
             if k * spec.f0_hz >= fs / 2:
                 continue
-            ph0 = rng.uniform(0, 2 * np.pi)
+            ph0 = r_ph.uniform(0, 2 * np.pi)
             sig += a * path_gain(rq, k * spec.f0_hz) * np.sin(k * phase + ph0)
     else:        # complex recursion over half-orders: one exp per path/twin instead of one sin per tone
         kmax = max(k for k, _ in orders)
-        draws = {(k, det): rng.uniform(0, 2 * np.pi) for k, _ in orders for det in twins}
+        # base-tone phases from one stream, twin phases from another: adding a twin never moves base phases
+        draws = {(k, 0.0): r_ph.uniform(0, 2 * np.pi) for k, _ in orders}
+        tw = {k: r_tw.uniform(0, 2 * np.pi) for k, _ in orders}
+        draws.update({(k, det): tw[k] for k, _ in orders for det in twins if det})
         for det in twins:
             for ph, rr, refl in paths:
                 zh = np.exp(0.5j * (1 + det) * ph)       # half-order step
@@ -653,11 +686,11 @@ def flyover_audio(
         # Broadband jet noise, Doppler-warped: sample a source noise process at emission time.
         te_q = CubicSpline(t_r, t_track_rel)(tq)
         n_src = int(np.ceil((t_track_rel[-1] - t_track_rel[0]) * fs)) + 2
-        src = bandlimited_noise(rng, n_src, fs, p.jet_broadband_band_hz)
+        src = bandlimited_noise(r_bb, n_src, fs, p.jet_broadband_band_hz)
         bb = np.interp((te_q - t_track_rel[0]) * fs, np.arange(n_src), src)
         out[valid] += np.sqrt(p_ref * 10 ** (p.jet_broadband_to_tone_db / 10)) * gain * bb
     elif p.broadband_to_tone_db > -np.inf:
-        bb = bandlimited_noise(rng, t_audio_rel.size, fs, p.noise_band_hz)
+        bb = bandlimited_noise(r_bb, t_audio_rel.size, fs, p.noise_band_hz)
         out[valid] += np.sqrt(p_ref * 10 ** (p.broadband_to_tone_db / 10)) * gain * bb[valid]
     fade = np.clip(np.minimum(tq - t_r[0], t_r[-1] - tq) / 0.5, 0, 1)
     out[valid] *= fade
@@ -708,15 +741,35 @@ def make_scenario(
     p = params
     rng = np.random.default_rng(p.seed)
     aux = np.random.default_rng([p.seed, 1])  # non-event placement and types: keeps the event stream stable
-    rrng = np.random.default_rng([p.seed, 3])  # realism: scene-level draws
-    srng = np.random.default_rng([p.seed, 4])  # realism: per-source draws
-    nrng = np.random.default_rng([p.seed, 5])  # realism: scene noise, near traffic
-    arng = np.random.default_rng([p.seed, 6])  # realism: ADS-B degradation
-    c_true = c + (rrng.uniform(-1, 1) * rp.c_mismatch_mps if rp.c_mismatch_mps else 0.0)
-    wspd, wdir = rrng.uniform(0, rp.wind_max_mps), rrng.uniform(0, 2 * np.pi)
-    wind = (float(wspd * np.sin(wdir)), float(wspd * np.cos(wdir))) if rp.wind_max_mps else (0.0, 0.0)
-    h_mic = float(rrng.uniform(*rp.mic_height_range_m)) if rp.mic_height_range_m else p.mic_height_m
-    clock_err = float(rrng.uniform(-1, 1) * rp.clock_offset_max_s) if rp.clock_offset_max_s else 0.0
+    real = rp.any_on
+    if real:
+        # P0.2: one stream per (realism group, key); every draw unconditional, so a group toggled off still
+        # consumes its draws and toggling one group never shifts another's (paired ablations).
+        def R(group, key=""):
+            return realism_rng(p.seed, group, key)
+
+        u_c = R("path", "c").uniform(-1, 1)
+        wspd_u, wdir = R("path", "wind").uniform(size=2)
+        u_h = R("geometry", "mic_h").uniform()
+        u_clock = R("geometry", "clock").uniform(-1, 1)
+        c_true = c + u_c * rp.c_mismatch_mps
+        wspd, wdir = wspd_u * rp.wind_max_mps, 2 * np.pi * wdir
+        wind = (float(wspd * np.sin(wdir)), float(wspd * np.cos(wdir))) if rp.wind_max_mps else (0.0, 0.0)
+        h_mic = (float(rp.mic_height_range_m[0] + u_h * (rp.mic_height_range_m[1] - rp.mic_height_range_m[0]))
+                 if rp.mic_height_range_m else p.mic_height_m)
+        clock_err = float(u_clock * rp.clock_offset_max_s)
+        place_rng = lambda key: R("place", key)          # noqa: E731
+        type_rng = lambda key: R("types", key)           # noqa: E731
+        nrng = R("near")
+    else:     # clean scenarios: the legacy streams, bit-identical to milestones 1-5
+        rrng = np.random.default_rng([p.seed, 3])
+        nrng = np.random.default_rng([p.seed, 5])
+        c_true = c
+        wspd, wdir = rrng.uniform(0, rp.wind_max_mps), rrng.uniform(0, 2 * np.pi)
+        wind = (0.0, 0.0)
+        h_mic = p.mic_height_m
+        clock_err = 0.0
+        place_rng = type_rng = aux
 
     rad = p.mic_max_offset_m * np.sqrt(rng.uniform())   # always drawn, so a given mic_enu keeps the event stream
     ang = rng.uniform(0, 2 * np.pi)
@@ -726,8 +779,8 @@ def make_scenario(
     auto = specs is None
     if auto:
         specs = random_event_specs(rng, p) if p.event_rx_times_s is not None else random_track_specs(rng, p)
-        if rp.any_on:
-            specs = rl.perturb_kinematics(rrng, specs, rp)
+        if real:
+            specs = rl.perturb_kinematics(lambda k: R("geometry", k), specs, rp)
 
     fs = p.fs_hz
     n = int(round(p.duration_s * fs))
@@ -742,13 +795,16 @@ def make_scenario(
               for s, e in zip(ev_specs, ev_enu)]
     decoys: list[DecoyTruth] = []
     if auto:
-        extra, _, decoys = place_non_events(aux, p, ev_specs, ev_enu, truths, mic_enu, ground_rel, t_track, c_true)
+        # placed with the pipeline's c: a path-group c mismatch must not move non-event placement
+        extra, _, decoys = place_non_events(place_rng, p, ev_specs, ev_enu, truths, mic_enu, ground_rel, t_track,
+                                            c if real else c_true)
         specs = specs + extra
-    specs = assign_types(aux, specs)
+    specs = assign_types(type_rng, specs)
+    c_place = c if real else c_true    # non-event placement uses the pipeline's c (path toggles don't move it)
     if len(decoy_targets_enu):
         drng = np.random.default_rng([p.seed, 2])
-        extra, _, more = place_target_decoys(drng, p, decoy_targets_enu, mic_enu, ground_rel, t_track, c_true)
-        specs = specs + assign_types(drng, extra)
+        extra, _, more = place_target_decoys(drng, p, decoy_targets_enu, mic_enu, ground_rel, t_track, c_place)
+        specs = specs + assign_types(type_rng if real else drng, extra)
         decoys = decoys + more
     if auto and rp.n_near_traffic:
         near = []
@@ -761,13 +817,13 @@ def make_scenario(
                 anchor = (mic_enu[0] + d * np.cos(a_), mic_enu[1] + d * np.sin(a_))
                 sp = _random_spec(nrng, p, cls, "near", 800 + j, anchor, nrng.uniform(0.0, 1.0) * p.duration_s,
                                   offset_scale=0.0)
-                sp = resolve_rx_time(sp, mic_enu, ground_rel, t_track, c_true, n_iter=0)
+                sp = resolve_rx_time(sp, mic_enu, ground_rel, t_track, c_place, n_iter=0)
                 ms = min_slant_in_clip(build_track_enu(sp, mic_enu, ground_rel, t_track), t_track, mic_enu,
-                                       c_true, p.duration_s)
+                                       c_place, p.duration_s)
                 if 0.5 * thr <= ms <= 1.5 * thr:
                     near.append(sp)
                     break
-        specs = specs + assign_types(nrng, near)
+        specs = specs + assign_types(type_rng if real else nrng, near)
 
     noise = colored_noise(rng, n, fs)
     p_noise = band_power(noise, fs, p.noise_band_hz)
@@ -781,7 +837,11 @@ def make_scenario(
         else:
             tru = event_truth(s.icao24, s.f0_hz, t_track, enu, mic_enu, c_true, cls=s.cls)
         base = np.asarray(p.jet_harmonic_amps if s.cls == "jet" else p.harmonic_amps, float)
-        rs = rl.draw_source(srng, s.cls, rp, base, p.duration_s) if rp.any_on else None
+        rs, lrng = None, None
+        if real:
+            lrng = R("levels", s.icao24)
+            rs = rl.draw_source(R("source", s.icao24), s.cls, rp, base, p.duration_s, level_rng=lrng,
+                                path_rng=R("path", s.icao24))
         level = None
         r_min = min_slant_in_clip(enu, t_track, mic_enu, c_true, p.duration_s)
         if rp.level_model == "shared":
@@ -791,19 +851,29 @@ def make_scenario(
                 for _ in range(50):
                     if _peak_snr_db(level, tru.d_m, s.f0_hz, p, rp) >= rp.event_min_snr_db:
                         break
-                    level = mean + float(srng.normal(0, rp.level_sigma_db))
+                    level = mean + float(lrng.normal(0, rp.level_sigma_db))
                 else:
                     level += rp.event_min_snr_db - _peak_snr_db(level, tru.d_m, s.f0_hz, p, rp)
         audible_enough = r_min < p.skip_audio_beyond_m and (
             level is None or _peak_snr_db(level, r_min, s.f0_hz, p, rp) > -45.0)
         if s.role == "event" or audible_enough:
-            audio += flyover_audio(rng, s, tru, t_track, enu, mic_enu, t_audio, fs, p_noise, p, c_true,
-                                   rs, rp if rp.any_on else None, wind, ground_rel, level)
+            audio += flyover_audio(R("audio", s.icao24) if real else rng, s, tru, t_track, enu, mic_enu, t_audio,
+                                   fs, p_noise, p, c_true, rs, rp if real else None, wind, ground_rel, level)
         lvl_info = level if level is not None else (
             (p.jet_snr_at_ref_db if s.cls == "jet" else p.prop_snr_at_ref_db) if s.role != "event" else None)
         info[s.icao24] = {"role": s.role, "cls": s.cls, "level_db_at_ref": lvl_info, "min_slant_in_clip_m": r_min,
                           "peak_band_snr_db": (_peak_snr_db(lvl_info, r_min, s.f0_hz, p, rp)
                                                if lvl_info is not None else (p.snr_db if s.role == "event" else None))}
+        if real:   # every hidden draw that shapes this aircraft (P0.2 / P-F15)
+            info[s.icao24]["source"] = {
+                "ramp_frac": rs.ramp_frac, "ramp_t_rel_s": rs.ramp_t_rel_s, "ramp_dur_s": rs.ramp_dur_s,
+                "twin_detune": rs.twin_detune, "directivity_db": rs.directivity_db, "reflection": rs.reflection,
+                "level_offset_db": rs.level_offset_db, "rpm_walk_frac": rs.rpm_walk,
+                "n_harmonics": int(len(rs.harmonics)), "half_order": rs.half_order is not None}
+            info[s.icao24]["kinematics"] = {
+                "heading_deg": s.heading_deg, "speed_mps": s.speed_mps, "turn_rate_deg_s": s.turn_rate_deg_s,
+                "turn_half_s": getattr(s, "turn_half_s", None), "climb_mps": getattr(s, "climb_mps", 0.0),
+                "accel_frac": getattr(s, "accel_frac", 0.0)}
         tr = Track.from_enu(s.icao24, s.callsign, start_time_s + t_track, enu, frame, type_code=s.type_code)
         # velocity in each fix's own local ENU (as ADS-B reports it), not the scenario frame's
         v_ecef = enu_vector_to_ecef(np.gradient(enu, t_track, axis=0), frame.lat0, frame.lon0)
@@ -811,19 +881,20 @@ def make_scenario(
         tracks.append(tr)
         enus.append(enu)
     if rp.noise_model == "realistic":
-        audio += rl.scene_noise(nrng, n, fs, p_noise, rp, bandlimited_noise)
+        audio += rl.scene_noise(R("scene", "noise") if real else nrng, n, fs, p_noise, rp, bandlimited_noise)
     audio = rl.recording_chain(audio, fs, rp)
     audio = (0.9 * audio / np.max(np.abs(audio))).astype(np.float32)
     lat, lon, _ = frame.to_geodetic(mic_enu)
     adsb, adsb_info = None, {}
     if rp.adsb_degrade:
-        adsb, adsb_info = rl.degrade_adsb(arng, tracks_to_frame(tracks, frame), {s.icao24: s.cls for s in specs},
+        adsb, adsb_info = rl.degrade_adsb(lambda k: R("adsb", k), tracks_to_frame(tracks, frame),
+                                          {s.icao24: s.cls for s in specs},
                                           rp, protect={s.icao24 for s in ev_specs})
     return Scenario(
         frame=frame, start_time_s=start_time_s, fs_hz=fs, audio=audio, tracks=tracks, track_enu=enus,
         mic_enu=mic_enu, mic_lat=float(lat), mic_lon=float(lon), ground_elev_m=ground_elev_m,
         specs=specs, truth=truths, c=c, params=p, decoys=decoys,
-        registry=synthetic_registry(aux, specs, p.unknown_type_frac),
+        registry=synthetic_registry(type_rng, specs, p.unknown_type_frac),
         realism=rp if rp.any_on else None, adsb_frame=adsb, adsb_info=adsb_info,
         stated_start_s=start_time_s + clock_err if clock_err else None, c_true=c_true, wind_enu=wind,
         aircraft_info=info,

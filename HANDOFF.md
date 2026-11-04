@@ -3,28 +3,68 @@
 Read CLAUDE.md first; it is authoritative for methodology and conventions. This file
 records session state, decisions, and what is fragile.
 
-## START HERE (end of session 3, commit 1894c68 + this handoff)
-Where things stand: milestone 5 passes on *clean* synthetic data. A skeptic review showed the clean
-synth was far too favourable, so a realism layer was added. With **all** realism on, the true cell
-survives every cascade stage but **ranks 5–39** (errors 100–410 m). Each realism group alone gives
-rank 1–2. The SNR / tolerance / DEM sensitivity sweep the user asked for has **not** been run yet:
-do it after the scoring robustness below, on realistic scenarios.
+## START HERE (end of session 4: Phase 0 code done, pilot run; moving to the user's PC via GitHub)
+Session 4 did a design comparison against doppler.txt (a video in which someone builds a similar tool),
+three independent skeptic reviews, a combined plan with an adversarial review, the user's decisions, and
+**Phase 0** of that plan. Read in this order:
+1. `reports/combined_plan.md`: the plan. §4 lists the decisions; §7 has the user's answers (all 17 USER
+   decisions settled, including the success definition U10 and the weak-event option F1).
+2. `reports/ablation_pilot.md`: the pilot results and the compute estimate for Stage A.
+3. `reports/apriori_registry.md`: every new knob, with its source and sensitivity grid (P0.7 rule: never move
+   a provisional value to hit a target).
+4. Background, as needed: `reports/skeptic_*.md`, `reports/plan_review.md`, `reports/doppler_comparison.md`.
 
-### Next steps, in order
-1. **Leave-one-group-out ablation** (lost when the session crashed). Script:
-   `/private/tmp/.../scratchpad/scripts/ablate.py` is scratch and may be gone; recreate it. Per
-   scenario (A: 600 s 150,420; C: 60 s 15,45; G: 300 s 50,150,250), run synth with every realism
-   toggle on except one group (adsb, levels, source, path, scene, geometry; also RPM-only, c/wind-only,
-   mic-height-only), then `locate --no-plots`. Record rank, error, and per-event fit errors vs truth
-   (dv, dd, dt against their tolerances). This shows which effects break *scoring* in combination.
-2. Likely scoring fixes (each needs user sign-off, because they touch CLAUDE.md methodology step 8):
-   - **per-event f0 drift** nuisance (f0·(1+β·(t−t_cpa))) for RPM ramps (3–10% in 30% of events);
-     constant f0 per event cannot fit them.
-   - **speed-of-sound search** over environment.temperature_search_c (CLAUDE.md already allows a
-     range); synth now mismatches c by ±3 m/s.
-   - mic height: the pipeline assumes 1.5 m and synth draws 1–10 m; could search it like Δt (cheap).
-3. Then the user's sweep: SNR, tolerance settings (n_sigma, sys values), DEM error (bias/noise via
-   region.ground_elev_m or a perturbed DEM), on realistic scenarios plus `--clean`.
+### Phase 0 status
+- **Done, with tests** (157 passing incl. slow):
+  - **P0.0:** variant overlays (`config.yaml variants: V0/V1`, `locate --variant`) and tag `variants-asdesigned`
+    (= ea8fe0d).
+  - **P0.1 a:** Newton seed clamped to track coverage.
+  - **P0.1 b:** tile pruning respects `max_unmatched_events`.
+  - **P0.1 h:** run.json `config_provenance` (overrides vs committed config) and `events_provenance`.
+  - **P0.1 i:** best-first hypothesis enumeration (separate full/partial caps, budget), a CPA radius cap, and
+    weak events (σ_d/d > 0.5) not gating pruning in V1 (off in V0, user F1).
+  - **P0.2:** per-group, per-aircraft random streams with unconditional draws (`synth.realism_rng`,
+    `realism.ABLATION_GROUPS`, `realism.without`). Hidden draws are recorded in truth.json. Clean scenarios are
+    bit-identical; realistic ones are NOT the same as session 3's (re-baselined, as the plan says).
+  - **P0.3:** `cli.run_locate` (in memory) + `write_outputs`; `LocateInputs`/`LocateResult`. Events seam:
+    `events --out X.parquet` writes `X.meta.json`; `locate --events X.parquet` checks provenance, and any
+    mismatch goes to `manual_inputs`.
+  - **P0.4:** `doppler/evaluate.py` (outcome tiers per U10, failure taxonomy, fallback arms, re-ordering rule);
+    the provisional `inconsistent` status (`score.absolute_fit_status`); `cli.py ablate` (paired, resumable
+    rows.jsonl, `--jobs`, a per-variant wall-clock cap, a free-space guard, scenarios deleted after use).
+  - **P0.5:** full slow suite run. **P0.7:** registry.
+- **P0.6 pilot done** (reports/ablation_pilot.md). **Stage A not run.** Its compute is about 36 h, about 12 h
+  wall at `--jobs 3` (3× the plan's estimate, from V1 scoring on clips with spurious events). Before running it,
+  ask the user: run as is on the PC, lower the cap, or profile `score.rank_cells` first (CLAUDE.md: flag the
+  hot spot before reaching for numba or multiprocessing).
+
+### Running Stage A (on a committed, clean tree; the driver refuses a dirty tree without --allow-dirty)
+```bash
+git worktree add ../qgis-asdesigned variants-asdesigned      # the as-designed arms run from here
+.venv/bin/python cli.py ablate --plan stageA --variants V0,V1 --jobs 3 --out outputs/ablation/stageA
+.venv/bin/python cli.py ablate --plan stageA --limit 50 --variants V0-asdesigned,V1-asdesigned \
+    --asdesigned-dir ../qgis-asdesigned --jobs 3 --out outputs/ablation/stageA   # all-on seeds 0-49 (plan: 0-19)
+.venv/bin/python cli.py ablate --summarize --out outputs/ablation/stageA
+```
+The run is resumable: rerun the same command and finished rows are skipped, failed ("error") rows are
+retried. The as-designed arms report only the old run.json fields.
+
+### New machine setup (gitignored files)
+- `.venv` from requirements.txt.
+- `data/proj` geoid grids: `pyproj sync` (CLAUDE.md, Geoid pitfall).
+- `outputs/plotly.min.js` (see Decisions §4 below for the URL and sha256).
+- OpenSky: the user supplies credentials themselves through pyopensky's own config, never in the repo. If Trino
+  access isn't granted by P4.3/P5.2, fall back to https://opensky-network.org/data/scientific.
+
+### Next after Stage A (plan §3, dependency order)
+Apply the re-ordering rule to Stage A (the pilot points to P3.5 before Phase 2). Then Phase 1: P1.1
+calibrated likelihood (arm), P1.2 assignment-level ranking, P1.3 ellipse, P1.4 ambiguity v2, P1.5 clock-prior
+diagnostic, P1.6 reduced sweep. Still pending in CLAUDE.md: the single-event pitfall rewording (U7), the
+Validation text (U10), and the two doc fixes in plan §7.
+
+## Session 3 state (superseded where Phase 0 changed it)
+Milestone 5 passes on *clean* synthetic data. With all realism on, the true cell ranked 5–39 (session-3
+random streams; P0.2 changed them, so those numbers don't reproduce).
 
 ### Two design variants to keep (user, end of session 3)
 The user accepted the two changes below as the **current defaults** but wants the **original design kept**

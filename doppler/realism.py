@@ -103,26 +103,73 @@ class RealismParams:
         return self != RealismParams()
 
 
-def perturb_kinematics(rng: np.random.Generator, specs: list, p: RealismParams) -> list:
-    """Corridor-aligned events, climbs/descents, speed ramps and harder turns (realistic traffic)."""
+# Leave-one-group-out ablation groups (HANDOFF next steps; reports/combined_plan.md §3.0). Every
+# RealismParams field belongs to exactly one group (tests check). Subgroups isolate single effects.
+ABLATION_GROUPS: dict[str, tuple[str, ...]] = {
+    "adsb": ("adsb_degrade", "adsb_interval_s", "adsb_interval_jitter_s", "adsb_latency_s", "adsb_pos_sigma_m",
+             "adsb_mlat_frac", "adsb_mlat_sigma_m", "adsb_geo_alt_sigma_m", "adsb_alt_quant_ft",
+             "adsb_baro_only_frac_prop", "adsb_baro_offset_sigma_m", "adsb_speed_quant_kt", "adsb_vrate_quant_fpm",
+             "adsb_gap_rate_per_min", "adsb_gap_s", "adsb_drop_prop_frac"),
+    "levels": ("level_model", "level_sigma_db", "event_min_snr_db"),
+    "source": ("harmonic_model", "n_harmonics", "harmonic_slope_db", "harmonic_scatter_db", "half_order_db",
+               "rpm_walk_frac", "rpm_ramp_prob", "rpm_ramp_frac", "twin_prob", "twin_detune_frac",
+               "directivity_db"),
+    "path": ("absorption", "humidity_pct", "ground_reflection", "reflection_coef", "wind_max_mps",
+             "c_mismatch_mps"),
+    "scene": ("noise_model", "wind_noise_db", "hum_db", "n_car_passes", "car_db", "n_bird_chirps", "bird_db",
+              "highpass_hz", "agc_strength"),
+    "geometry": ("corridor_frac", "corridor_spread_deg", "climb_prob", "climb_mps", "speed_ramp_prob",
+                 "speed_ramp_frac", "turn_rate_max_deg_s", "n_near_traffic", "mic_height_range_m",
+                 "clock_offset_max_s"),
+}
+ABLATION_SUBGROUPS: dict[str, tuple[str, ...]] = {
+    "rpm": ("rpm_walk_frac", "rpm_ramp_prob"),
+    "cwind": ("wind_max_mps", "c_mismatch_mps"),
+    "mic_height": ("mic_height_range_m",),
+    "corridor": ("corridor_frac",),
+    "twins": ("twin_prob",),
+    "reflection": ("ground_reflection",),
+}
+
+
+def without(p: RealismParams, names) -> RealismParams:
+    """``p`` with the named fields (or a group / subgroup name) reset to their off values."""
     from dataclasses import replace
 
+    if isinstance(names, str):
+        names = ABLATION_GROUPS.get(names) or ABLATION_SUBGROUPS[names]
+    off = RealismParams()
+    return replace(p, **{n: getattr(off, n) for n in names})
+
+
+def perturb_kinematics(rng, specs: list, p: RealismParams) -> list:
+    """Corridor-aligned events, climbs/descents, speed ramps and harder turns (realistic traffic).
+
+    ``rng``: a Generator (one shared stream) or a callable ``icao24 -> Generator`` (one stream per
+    aircraft, the default in make_scenario). Every draw is made unconditionally, so a setting that is
+    off still consumes its draws and toggling one effect never shifts another's.
+    """
+    from dataclasses import replace
+
+    rng_for = rng if callable(rng) and not isinstance(rng, np.random.Generator) else (lambda _k: rng)
     out, h0 = [], None
     for s in specs:
+        r = rng_for(s.icao24)
+        u = r.uniform(size=10)
         kw = {}
         if s.role == "event":
             if h0 is None:
                 h0 = s.heading_deg
-            elif rng.uniform() < p.corridor_frac:
-                kw["heading_deg"] = float((h0 + rng.uniform(-p.corridor_spread_deg, p.corridor_spread_deg)
-                                           + 180.0 * rng.integers(0, 2)) % 360)
+            elif u[0] < p.corridor_frac:
+                kw["heading_deg"] = float((h0 + (2 * u[1] - 1) * p.corridor_spread_deg + 180.0 * (u[2] < 0.5)) % 360)
             if s.turn_rate_deg_s:
-                kw["turn_rate_deg_s"] = float(np.sign(s.turn_rate_deg_s) * rng.uniform(0.3, p.turn_rate_max_deg_s))
-                kw["turn_half_s"] = float(rng.uniform(10.0, 60.0))
-        if s.cls != "jet" and rng.uniform() < p.climb_prob:
-            kw["climb_mps"] = float(rng.uniform(*p.climb_mps) * rng.choice([-1, 1]))
-        if rng.uniform() < p.speed_ramp_prob:
-            kw["accel_frac"] = float(rng.uniform(-p.speed_ramp_frac, p.speed_ramp_frac))
+                kw["turn_rate_deg_s"] = float(np.sign(s.turn_rate_deg_s) * (0.3 + u[3] * (p.turn_rate_max_deg_s - 0.3)))
+                kw["turn_half_s"] = float(10.0 + 50.0 * u[4])
+        if s.cls != "jet" and u[5] < p.climb_prob:
+            lo, hi = p.climb_mps
+            kw["climb_mps"] = float((lo + u[6] * (hi - lo)) * (1 if u[7] < 0.5 else -1))
+        if u[8] < p.speed_ramp_prob:
+            kw["accel_frac"] = float((2 * u[9] - 1) * p.speed_ramp_frac)
         out.append(replace(s, **kw) if kw else s)
     return out
 
@@ -164,35 +211,47 @@ class SourceRealism:
 
 
 def draw_source(rng: np.random.Generator, cls: str, p: RealismParams, base_amps: NDArray,
-                duration_s: float) -> SourceRealism:
+                duration_s: float, level_rng: np.random.Generator | None = None,
+                path_rng: np.random.Generator | None = None) -> SourceRealism:
+    """Per-aircraft source draws. ``level_rng`` (levels group) and ``path_rng`` (ground reflection) default
+    to ``rng``; make_scenario passes one stream per group and aircraft. Draws are unconditional (see
+    perturb_kinematics), so toggling e.g. twins never changes this aircraft's ramp or level."""
+    level_rng = rng if level_rng is None else level_rng
+    path_rng = rng if path_rng is None else path_rng
     s = SourceRealism(harmonics=np.asarray(base_amps, float))
+    lvl = float(level_rng.normal(0, 1))
     if p.level_model == "shared":
-        s.level_offset_db = float(rng.normal(0, p.level_sigma_db))
+        s.level_offset_db = lvl * p.level_sigma_db
+    n = p.n_harmonics if cls != "jet" else max(2, p.n_harmonics // 4)
+    z_h, z_half = rng.standard_normal(n), rng.standard_normal(n)
     if p.harmonic_model == "rich":
-        n = p.n_harmonics if cls != "jet" else max(2, p.n_harmonics // 4)
         k = np.arange(1, n + 1)
-        db = p.harmonic_slope_db * (k - 1) + rng.normal(0, p.harmonic_scatter_db, n)
+        db = p.harmonic_slope_db * (k - 1) + z_h * p.harmonic_scatter_db
         s.harmonics = 10 ** (db / 20)
         if cls != "jet":
-            s.half_order = 10 ** ((db + p.half_order_db + rng.normal(0, 3, n)) / 20)
+            s.half_order = 10 ** ((db + p.half_order_db + 3 * z_half) / 20)
     s.rpm_walk = p.rpm_walk_frac
-    if rng.uniform() < p.rpm_ramp_prob:
-        s.ramp_frac = float(rng.uniform(*p.rpm_ramp_frac) * rng.choice([-1, 1]))
-        s.ramp_t_rel_s = float(rng.uniform(0, duration_s))
-        s.ramp_dur_s = float(rng.uniform(10, 40))
-    if cls != "jet" and rng.uniform() < p.twin_prob:
-        s.twin_detune = float(rng.uniform(*p.twin_detune_frac))
-    s.directivity_db = float(rng.uniform(-1, 1) * p.directivity_db)
+    u = rng.uniform(size=8)
+    if u[0] < p.rpm_ramp_prob:
+        s.ramp_frac = float((p.rpm_ramp_frac[0] + u[1] * (p.rpm_ramp_frac[1] - p.rpm_ramp_frac[0]))
+                            * (1 if u[2] < 0.5 else -1))
+        s.ramp_t_rel_s = float(u[3] * duration_s)
+        s.ramp_dur_s = float(10 + 30 * u[4])
+    if cls != "jet" and u[5] < p.twin_prob:
+        s.twin_detune = float(p.twin_detune_frac[0] + u[6] * (p.twin_detune_frac[1] - p.twin_detune_frac[0]))
+    s.directivity_db = float((2 * u[7] - 1) * p.directivity_db)
+    u_r = float(path_rng.uniform())
     if p.ground_reflection:
-        s.reflection = float(rng.uniform(*p.reflection_coef))
+        s.reflection = float(p.reflection_coef[0] + u_r * (p.reflection_coef[1] - p.reflection_coef[0]))
     return s
 
 
 def rpm_profile(rng: np.random.Generator, t_rel: NDArray, s: SourceRealism, dt_s: float) -> NDArray:
     """Fractional RPM deviation over the track's time axis (random walk + optional smooth ramp)."""
     out = np.zeros_like(t_rel)
+    z = rng.standard_normal(t_rel.size)          # drawn even when the walk is off (stream stability)
     if s.rpm_walk > 0:
-        w = np.cumsum(rng.standard_normal(t_rel.size))
+        w = np.cumsum(z)
         w = gaussian_filter1d(w - w.mean(), sigma=2.0 / dt_s)
         out += s.rpm_walk * w / max(np.std(w), 1e-12)
     if s.ramp_frac:
@@ -268,21 +327,25 @@ def recording_chain(x: NDArray, fs: float, p: RealismParams) -> NDArray:
 # ---------------------------------------------------------------------------
 # ADS-B
 # ---------------------------------------------------------------------------
-def degrade_adsb(rng: np.random.Generator, df: pd.DataFrame, cls_by_icao: dict[str, str], p: RealismParams,
+def degrade_adsb(rng, df: pd.DataFrame, cls_by_icao: dict[str, str], p: RealismParams,
                  protect: set[str] = frozenset()) -> tuple[pd.DataFrame, dict]:
     """Clean canonical-schema track table -> what a receiver network reports. Returns (table, per-track info).
 
-    ``protect``: icao24s never dropped (the scenario's events), so a coverage loss is a deliberate stress
-    setting (adsb_drop_prop_frac) rather than an accident.
+    ``rng``: a Generator (one stream for all aircraft) or a callable ``icao24 -> Generator`` (one stream
+    per aircraft, as make_scenario uses). ``protect``: icao24s never dropped (the scenario's events), so a
+    coverage loss is a deliberate stress setting (adsb_drop_prop_frac) rather than an accident.
     """
     if not p.adsb_degrade:
         return df, {}
+    rng_for = rng if callable(rng) and not isinstance(rng, np.random.Generator) else (lambda _k: rng)
     t_all = pd.to_datetime(df["time_utc"], utc=True)
     df = df.assign(_t=(t_all - pd.Timestamp(0, tz="UTC")).dt.total_seconds())
     out, info = [], {}
     for icao, g in df.groupby("icao24", sort=False):
+        rng = rng_for(icao)
         cls = cls_by_icao.get(icao, "prop")
-        if cls != "jet" and icao not in protect and rng.uniform() < p.adsb_drop_prop_frac:
+        u_drop, u_baro = rng.uniform(size=2)
+        if cls != "jet" and icao not in protect and u_drop < p.adsb_drop_prop_frac:
             info[icao] = {"dropped": True}
             continue
         g = g.sort_values("_t")
@@ -314,7 +377,7 @@ def degrade_adsb(rng: np.random.Generator, df: pd.DataFrame, cls_by_icao: dict[s
         geo = np.round((col["geometric_alt_m"] + rng.normal(0, p.adsb_geo_alt_sigma_m, tf.size)) / q) * q
         baro_off = float(rng.normal(0, p.adsb_baro_offset_sigma_m))
         baro = np.round((col["geometric_alt_m"] - baro_off) / q) * q
-        baro_only = cls != "jet" and rng.uniform() < p.adsb_baro_only_frac_prop
+        baro_only = cls != "jet" and u_baro < p.adsb_baro_only_frac_prop
         if baro_only:
             geo = np.full(tf.size, np.nan)
         bias = float(rng.uniform(-p.adsb_latency_s, p.adsb_latency_s))

@@ -94,14 +94,57 @@ def write_events(fits: list[EventFit], path: Path, start_time_s: float | None = 
                      "coverage_pre": r["coverage_tau"][0], "coverage_post": r["coverage_tau"][1],
                      "rms_hz": e.rms_hz, "noise_hz": e.noise_hz, "n_points": e.n_points,
                      "window_start_s": e.window.start_s, "window_end_s": e.window.end_s,
-                     "subharmonic": e.ridge.subharmonic, "t0_utc": r.get("t0_utc", "")})
+                     "subharmonic": e.ridge.subharmonic, "t0_utc": r.get("t0_utc", ""),
+                     # everything read_events needs to rebuild the EventFit exactly (the events seam, P0.3)
+                     "cov_json": json.dumps(np.asarray(e.cov, float).tolist()),
+                     "sigma_json": json.dumps({n: float(v) for n, v in e.sigma.items()}),
+                     "drift_per_s": e.drift_per_s, "converged": bool(e.converged), "c_mps": e.c,
+                     "window_band_lo_hz": e.window.band_hz[0], "window_band_hi_hz": e.window.band_hz[1],
+                     "window_peak_s": e.window.peak_s, "window_peak_excess_db": e.window.peak_excess_db,
+                     "window_manual": bool(e.window.manual), "ridge_noise_hz": e.ridge.noise_hz,
+                     "ridge_band_lo_hz": e.ridge.band_hz[0], "ridge_band_hi_hz": e.ridge.band_hz[1],
+                     "ridge_subharmonic_excess_db": e.ridge.subharmonic_excess_db,
+                     "class_features_json": json.dumps(r["class_features"])})
         ridges.append(pd.DataFrame({"event": np.full(len(e.ridge.t_s), k, np.int16),
                                     "t_rel_s": e.ridge.t_s.astype(np.float64),
                                     "f_hz": e.ridge.f_hz.astype(np.float64),
-                                    "excess_db": e.ridge.excess_db.astype(np.float32)}))
+                                    "excess_db": e.ridge.excess_db.astype(np.float64)}))
     write_parquet(pd.DataFrame(rows), path)
     write_parquet(pd.concat(ridges, ignore_index=True) if ridges else pd.DataFrame(
         {"event": [], "t_rel_s": [], "f_hz": [], "excess_db": []}), path.with_name(path.stem + "_ridges.parquet"))
+
+
+def read_events(path: Path) -> list[EventFit]:
+    """Rebuild the EventFits written by :func:`write_events` (Parquet form), bit-exact for the pipeline."""
+    from .aircraft_types import class_code
+    from .classify import ClassFeatures
+    from .detect import EventWindow
+    from .ridge import Ridge
+
+    path = Path(path)
+    ev = read_parquet(path)
+    rd = read_parquet(path.with_name(path.stem + "_ridges.parquet"))
+    out = []
+    for _, r in ev.sort_values("event").iterrows():
+        pts = rd[rd["event"] == r["event"]]
+        ridge = Ridge(pts["t_rel_s"].to_numpy(float), pts["f_hz"].to_numpy(float), pts["excess_db"].to_numpy(float),
+                      float(r["ridge_noise_hz"]), (float(r["ridge_band_lo_hz"]), float(r["ridge_band_hi_hz"])),
+                      int(r["subharmonic"]), float(r["ridge_subharmonic_excess_db"]))
+        win = EventWindow(float(r["window_start_s"]), float(r["window_end_s"]),
+                          (float(r["window_band_lo_hz"]), float(r["window_band_hi_hz"])), float(r["window_peak_s"]),
+                          float(r["window_peak_excess_db"]), bool(r["window_manual"]))
+        cf = json.loads(r["class_features_json"]) if r.get("class_features_json") else None
+        cls = class_code(str(r["class"]))
+        e = EventFit(window=win, ridge=ridge, f0_hz=float(r["f0_hz"]), v_mps=float(r["v_mps"]), d_m=float(r["d_m"]),
+                     t0_s=float(r["t0_rel_s"]), t_cpa_received_s=float(r["t_cpa_received_rel_s"]),
+                     sigma=json.loads(r["sigma_json"]), cov=np.asarray(json.loads(r["cov_json"]), float),
+                     rms_hz=float(r["rms_hz"]), n_points=int(r["n_points"]), c=float(r["c_mps"]),
+                     converged=bool(r["converged"]), drift_per_s=float(r["drift_per_s"]), cls=cls,
+                     class_features=None if cf is None else ClassFeatures(cf["ridge_band"], cf["harmonics"],
+                                                                           cf["broadband_rise_db"], cls),
+                     noise_hz=float(r["noise_hz"]))
+        out.append(e)
+    return out
 
 
 # ---------------------------------------------------------------------------

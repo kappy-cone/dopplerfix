@@ -80,7 +80,8 @@ doppler/
   synth.py            # synthetic scenarios: tracks + hidden mic + audio
   realism.py          # realism layer for synthetic scenarios (ADS-B, source, path, scene degradations)
   countermeasures.py  # apply audio processing and rerun the pipeline
-cli.py                # subcommands: events, tracks, locate, synth, clean, countermeasures
+  evaluate.py         # validation metrics, outcome tiers, failure taxonomy (read-only diagnostics)
+cli.py                # subcommands: events, tracks, locate, synth, ablate, clean, countermeasures
 inputs/               # committed: search_regions.gpkg
 qgis/                 # committed: doppler_template.qgz, styles/*.qml, build_project.py
 tests/

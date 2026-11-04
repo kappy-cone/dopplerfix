@@ -60,3 +60,38 @@ def test_locate_outputs_contract_and_true_cell(scenario_dir, tmp_path, monkeypat
                      "--no-plots"]) == 0
     assert cli.main(["clean", "--config", str(cfgp), "--keep", "1"]) == 0
     assert not run.exists() and (tmp_path / "out" / "t2").exists() and (tmp_path / "out" / "plotly.min.js").exists()
+
+
+@pytest.mark.slow
+def test_locate_from_events_file_matches_detection_and_records_edits(scenario_dir, tmp_path):
+    """P0.3 seam: `events --out X.parquet` then `locate --events X.parquet` gives the same ranking as detecting;
+    an edited events file is recorded as a manual input (never silently treated as automated)."""
+    import yaml
+
+    cfg = cli.load_config("config.yaml")
+    cfg["outputs"]["root"] = str(tmp_path / "out")
+    cfgp = tmp_path / "config.yaml"
+    cfgp.write_text(yaml.safe_dump(cfg))
+    ev = tmp_path / "ev.parquet"
+    assert cli.main(["events", "--config", str(cfgp), "--audio", str(scenario_dir / "audio.flac"), "--out", str(ev)]) == 0
+    assert (tmp_path / "ev.meta.json").exists()
+    back = export.read_events(ev)
+    assert len(back) >= 2 and back[0].cov.shape[0] >= 4
+
+    base = ["locate", "--config", str(cfgp), "--scenario", str(scenario_dir), "--no-plots"]
+    assert cli.main(base + ["--run-id", "det"]) == 0
+    assert cli.main(base + ["--run-id", "file", "--events", str(ev)]) == 0
+    a = json.loads((tmp_path / "out" / "det" / "run.json").read_text())
+    b = json.loads((tmp_path / "out" / "file" / "run.json").read_text())
+    for k in ("rank", "rank1_error_m", "rank1_score", "true_cell_assignment"):
+        assert a["truth_eval"][k] == b["truth_eval"][k], k
+    assert a["survivors"] == b["survivors"]
+    assert b["manual_inputs"] == {} and b["events_provenance"]["manual"] is False
+
+    # edit the events file: a changed fitted speed must show up as a manual input
+    df = export.read_parquet(ev)
+    df.loc[0, "v_mps"] = df.loc[0, "v_mps"] + 1.0
+    export.write_parquet(df, ev)
+    assert cli.main(base + ["--run-id", "edited", "--events", str(ev)]) == 0
+    c = json.loads((tmp_path / "out" / "edited" / "run.json").read_text())
+    assert "events_file" in c["manual_inputs"] and "events file edited" in c["manual_inputs"]["events_file"]["reasons"]
