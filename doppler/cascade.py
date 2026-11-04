@@ -47,6 +47,7 @@ class CascadeParams:
     height_sys_m: float = 30.0           # PROVISIONAL: DEM + geoid + ADS-B geometric altitude error
     timing_sys_s: float = 1.0            # PROVISIONAL: straight-line t0 bias on curved/climbing tracks
     baro_alt_tol_m: float = 150.0        # extra height allowance for barometric-altitude tracks
+    gof_widening: bool = True            # σ × max(1, fit rms / ridge noise)
     tile_cells: int = 128                # tile edge in cells
     window_pad_s: float = 2.0
     prune_height_margin_m: float = 5000.0  # tile pruning bound on ground height (not a tolerance)
@@ -57,6 +58,10 @@ class CascadeParams:
     silence_dt_s: float = 1.0            # track decimation for the silence tree
     explain_time_tol_s: float = 20.0
     silence_explain: str = "cpa"         # cpa: only CPA-consistent passes explain | time: any compatible event in time
+    silence_audibility: str = "probabilistic"  # probabilistic: P(audible) from level scatter | hard: slant < threshold
+    silence_level_sigma_db: float = 6.0  # PROVISIONAL: source-level scatter around the class audibility threshold
+    silence_hard_prob: float = 0.99      # probabilistic: reject only when P(audible) of an unexplained pass ≥ this
+    max_unmatched_events: int = 1        # events allowed without a track (non-aircraft sources, no ADS-B)
     allow_shared_tracks: bool = False    # from score.allow_shared_tracks
     max_hypotheses_per_cell: int = 64    # from score.max_hypotheses_per_cell
 
@@ -83,6 +88,15 @@ class ObservedEvent:
     ridge_t_s: NDArray
     ridge_f_hz: NDArray
     ridge_w: NDArray
+    fit_rms_hz: float = float("nan")    # residual RMS of the characterization fit
+    fit_noise_hz: float = float("nan")  # white ridge scatter about the fit
+
+    @property
+    def gof(self) -> float:
+        """Goodness-of-fit factor max(1, rms/noise) ≈ sqrt(reduced χ²): systematic misfit inflates σ."""
+        if not (np.isfinite(self.fit_rms_hz) and np.isfinite(self.fit_noise_hz)) or self.fit_noise_hz <= 0:
+            return 1.0
+        return float(max(1.0, self.fit_rms_hz / self.fit_noise_hz))
 
     @property
     def sigma(self) -> NDArray:
@@ -99,7 +113,8 @@ def observed_events(fits: Sequence, c: float) -> list[ObservedEvent]:
         w = np.full(len(e.ridge.t_s), 1.0 / max(e.noise_hz if np.isfinite(e.noise_hz) else 1.0, 1e-3) ** 2)
         out.append(ObservedEvent(k, int(e.cls), float(e.t_cpa_received_s), float(e.v_mps), float(e.d_m),
                                  float(e.f0_hz), cov3, tuple(float(x) for x in e.coverage),
-                                 np.asarray(e.ridge.t_s, float), np.asarray(e.ridge.f_hz, float), w))
+                                 np.asarray(e.ridge.t_s, float), np.asarray(e.ridge.f_hz, float), w,
+                                 float(getattr(e, "rms_hz", np.nan)), float(getattr(e, "noise_hz", np.nan))))
     return out
 
 
@@ -118,7 +133,8 @@ class Tolerances:
 
 
 def event_tolerances(ev: ObservedEvent, p: CascadeParams, c: float, cell_half_diag_m: float) -> Tolerances:
-    """Tolerances from the fit covariance, widened for edge-clipped passes, with absolute physical allowances.
+    """Tolerances from the fit covariance, widened for edge-clipped passes and for systematic misfit
+    (σ × max(1, rms/noise), the reduced-χ² scaling), with absolute physical allowances.
 
     sys terms: v ← wind; d ← height error ⊕ d·wind/v (wind biases v, and d = v·τ);
     t ← model error ⊕ d·wind/c² (propagation in wind). The grid term is a hard
@@ -127,7 +143,7 @@ def event_tolerances(ev: ObservedEvent, p: CascadeParams, c: float, cell_half_di
     """
     sv, sd, st = (np.inf if not np.isfinite(s) else s for s in ev.sigma)
     n_clipped = sum(1 for x in ev.coverage_tau if x < p.truncated_coverage)
-    w = p.truncated_tol_mult ** n_clipped
+    w = p.truncated_tol_mult ** n_clipped * (ev.gof if p.gof_widening else 1.0)
     k = p.n_sigma * w
     v = max(ev.v_mps, 1.0)
     h = cell_half_diag_m
@@ -214,8 +230,8 @@ class HypothesisTable(_Table):
     """Candidate assignments (one pass per event) that satisfy the shared-Δt constraint."""
 
     cell: NDArray          # row index into the tile
-    passes: NDArray        # (H, N) int64 indices into the tile's PassTable
-    tracks: NDArray        # (H, N) int32 TrackSet indices
+    passes: NDArray        # (H, N) int64 indices into the tile's PassTable (−1: event left unmatched)
+    tracks: NDArray        # (H, N) int32 TrackSet indices (−1: unmatched)
     dt_lo_s: NDArray
     dt_hi_s: NDArray
     cost: NDArray          # interim cascade-consistency: RMS over events of |z| (v, d, t at the Δt midpoint)
@@ -232,7 +248,7 @@ class Hypothesis:
     """One scoring hypothesis: a cell, one track per event, and the allowed range of the shared Δt."""
 
     cell_id: int
-    assignment: tuple[int, ...]           # TrackSet index per event
+    assignment: tuple[int, ...]           # TrackSet index per event; −1 = event left unmatched
     dt_bounds_s: tuple[float, float]
 
 
@@ -383,11 +399,15 @@ def cpa_prefilter(tile: GridTile, events: Sequence[ObservedEvent], indexes: Sequ
     return PassTable.concat(parts)
 
 
-def cells_with_all_events(passes: PassTable, n_cells: int, n_events: int) -> NDArray:
-    """(M,) True where every event has at least one surviving pass."""
+def required_matched(n_events: int, p: CascadeParams) -> int:
+    return max(1, n_events - p.max_unmatched_events)
+
+
+def cells_with_all_events(passes: PassTable, n_cells: int, n_events: int, required: int | None = None) -> NDArray:
+    """(M,) True where at least ``required`` events (default: all) have a surviving pass."""
     have = np.zeros((n_cells, n_events), bool)
     have[passes.cell, passes.event] = True
-    return have.all(axis=1)
+    return have.sum(axis=1) >= (n_events if required is None else required)
 
 
 # ---------------------------------------------------------------------------
@@ -422,7 +442,8 @@ def offset_filter(passes: PassTable, n_cells: int, n_events: int, track_icao: ND
     inside = (a[pp] <= x + 1e-9) & (x <= b[pp] + 1e-9)
     covered = np.zeros((len(passes), n_events), bool)
     covered[q[inside], passes.event[pp[inside]]] = True
-    feasible_q = covered.all(axis=1) & (a <= b)
+    need = required_matched(n_events, p)
+    feasible_q = (covered.sum(axis=1) >= need) & (a <= b)
     keep[np.unique(passes.cell[feasible_q])] = True
 
     # Hypotheses for surviving cells (small sets: Python is fine here).
@@ -436,25 +457,28 @@ def offset_filter(passes: PassTable, n_cells: int, n_events: int, track_icao: ND
     seen: dict[int, set] = {}
     for qq, plist in by_q.items():
         cell = int(passes.cell[qq])
-        per_ev = [[p_ for p_ in plist if passes.event[p_] == e] for e in range(n_events)]
+        per_ev = [[p_ for p_ in plist if passes.event[p_] == e] + ([-1] if p.max_unmatched_events > 0 else [])
+                  for e in range(n_events)]
         s = seen.setdefault(cell, set())
         if len(s) >= p.max_hypotheses_per_cell:
             continue
         for combo in itertools.product(*per_ev):
             if combo in s:
                 continue
+            cidx = [c_ for c_ in combo if c_ >= 0]
+            if len(cidx) < need or len(combo) - len(cidx) > p.max_unmatched_events:
+                continue
             if not p.allow_shared_tracks:
-                ids = [track_icao[passes.track[c_]] for c_ in combo]
+                ids = [track_icao[passes.track[c_]] for c_ in cidx]
                 if len(set(ids)) < len(ids):
                     continue
-            lo, hi = float(np.max(a[list(combo)])), float(np.min(b[list(combo)]))
+            lo, hi = float(np.max(a[cidx])), float(np.min(b[cidx]))
             if lo > hi + 1e-9:
                 continue
             s.add(combo)
             mid = 0.5 * (lo + hi)
-            cidx = list(combo)
             zt = (passes.dt_center_s[cidx] - mid) / passes.tol_t_s[cidx]
-            z2 = zt ** 2 + passes.z_v[cidx] ** 2 + passes.z_d[cidx] ** 2
+            z2 = list(zt ** 2 + passes.z_v[cidx] ** 2 + passes.z_d[cidx] ** 2) + [9.0] * (len(combo) - len(cidx))
             rows.append((cell, combo, lo, hi, float(np.sqrt(np.mean(z2)))))
             if len(s) >= p.max_hypotheses_per_cell:
                 break
@@ -462,7 +486,8 @@ def offset_filter(passes: PassTable, n_cells: int, n_events: int, track_icao: ND
         return np.zeros(n_cells, bool), HypothesisTable.empty(n_events)
     hcell = np.array([r[0] for r in rows], np.int64)
     hp = np.array([r[1] for r in rows], np.int64).reshape(len(rows), n_events)
-    hyp = HypothesisTable(hcell, hp, passes.track[hp].astype(np.int32), np.array([r[2] for r in rows]),
+    htr = np.where(hp >= 0, passes.track[np.maximum(hp, 0)], -1).astype(np.int32)
+    hyp = HypothesisTable(hcell, hp, htr, np.array([r[2] for r in rows]),
                           np.array([r[3] for r in rows]), np.array([r[4] for r in rows]))
     keep = np.zeros(n_cells, bool)
     keep[hcell] = True
@@ -487,6 +512,7 @@ def best_hypothesis(hyp: HypothesisTable, n_cells: int) -> NDArray:
 class SilenceResult:
     keep: NDArray              # (M,) over the cells passed in
     n_unexplained: NDArray     # (M,) int
+    penalty_nats: NDArray      # (M,) probabilistic mode: Σ −ln(1 − P_audible) of unexplained passes
     n_audible: NDArray         # (M,) int
     culprit_cell: NDArray      # rows: (cell, track) of unexplained audible passes
     culprit_track: NDArray
@@ -509,9 +535,10 @@ def silence_filter(cell_xyz: NDArray, dt_s: NDArray, events: Sequence[ObservedEv
     M = len(cell_xyz)
     n_un = np.zeros(M, np.int64)
     n_aud = np.zeros(M, np.int64)
+    pen = np.zeros(M)
     empty = np.zeros(0, np.int64)
     if M == 0 or ix.tree is None:
-        return SilenceResult(np.ones(M, bool), n_un, n_aud, empty, empty)
+        return SilenceResult(np.ones(M, bool), n_un, pen, n_aud, empty, empty)
     m = cKDTree(cell_xyz).sparse_distance_matrix(ix.tree, ix.radius_m, output_type="ndarray")
     cell, pt, r = m["i"].astype(np.int64), m["j"].astype(np.int64), m["v"]
     ok = r < ix.thr_m[pt]
@@ -520,7 +547,7 @@ def silence_filter(cell_xyz: NDArray, dt_s: NDArray, events: Sequence[ObservedEv
     ok = (tau >= 0) & (tau <= prior.duration_s)
     cell, pt, r, tau = cell[ok], pt[ok], r[ok], tau[ok]
     if len(cell) == 0:
-        return SilenceResult(np.ones(M, bool), n_un, n_aud, empty, empty)
+        return SilenceResult(np.ones(M, bool), n_un, pen, n_aud, empty, empty)
     trk, smp = ix.track[pt], ix.sample[pt]
     o = np.lexsort((smp, trk, cell))
     cell, trk, smp, r, tau = cell[o], trk[o], smp[o], r[o], tau[o]
@@ -529,7 +556,7 @@ def silence_filter(cell_xyz: NDArray, dt_s: NDArray, events: Sequence[ObservedEv
     dur = np.bincount(run, minlength=nrun) * ix.dt_s
     o2 = np.lexsort((r, run))
     first = o2[np.r_[True, np.diff(run[o2]) != 0]]
-    rc, rt, rtau = cell[first], trk[first], tau[first]
+    rc, rt, rtau, rmin, rthr = cell[first], trk[first], tau[first], r[first], ix.thr_m[pt[o][first]]
     audible = dur >= p.silence_min_audible_s
     ev_t = np.array([e.t_rx_s for e in events])
     ev_c = np.array([e.cls for e in events])
@@ -552,8 +579,21 @@ def silence_filter(cell_xyz: NDArray, dt_s: NDArray, events: Sequence[ObservedEv
     un = audible & ~expl
     np.add.at(n_aud, rc[audible], 1)
     np.add.at(n_un, rc[un], 1)
-    keep = np.ones(M, bool) if p.silence_mode == "count" else n_un <= p.silence_max_unexplained
-    return SilenceResult(keep, n_un, n_aud, rc[un], rt[un].astype(np.int64))
+    if p.silence_audibility == "probabilistic":
+        from scipy.stats import norm
+
+        # P(audible): the source level must exceed what the class threshold assumes by 20·log10(r/thr) dB,
+        # with level scatter σ: P = Φ(20·log10(thr/r_min)/σ). Reject only near-certain misses; else penalise.
+        pa = norm.cdf(20 * np.log10(rthr / np.maximum(rmin, 1.0)) / p.silence_level_sigma_db)
+        hard = un & (pa >= p.silence_hard_prob)
+        n_hard = np.zeros(M, np.int64)
+        np.add.at(n_hard, rc[hard], 1)
+        soft = un & ~hard
+        np.add.at(pen, rc[soft], -np.log(np.maximum(1.0 - pa[soft], 1e-12)))
+        keep = np.ones(M, bool) if p.silence_mode == "count" else n_hard <= p.silence_max_unexplained
+    else:
+        keep = np.ones(M, bool) if p.silence_mode == "count" else n_un <= p.silence_max_unexplained
+    return SilenceResult(keep, n_un, pen, n_aud, rc[un], rt[un].astype(np.int64))
 
 
 # ---------------------------------------------------------------------------
@@ -574,6 +614,7 @@ class TileResult:
     n_unexplained: NDArray
     n_audible: NDArray
     culprit_track: NDArray         # TrackSet indices of unexplained audible passes at cells that reached silence
+    silence_penalty: NDArray       # (M,) nats (probabilistic silence), added to the score
     seconds: dict
 
 
@@ -617,7 +658,7 @@ def run_tile(spec: GridSpec, i0: int, j0: int, setup: CascadeSetup, ts: TrackSet
     M, N = len(tile), len(setup.events)
     t0 = time.perf_counter()
     passes = cpa_prefilter(tile, setup.events, setup.indexes, ts, prior, c, p)
-    cpa = cells_with_all_events(passes, M, N) if N else np.zeros(M, bool)
+    cpa = cells_with_all_events(passes, M, N, required_matched(N, p)) if N else np.zeros(M, bool)
     passes = passes.take(np.flatnonzero(cpa[passes.cell])) if len(passes) else passes
     sec["cpa"] = time.perf_counter() - t0
     t0 = time.perf_counter()
@@ -631,6 +672,7 @@ def run_tile(spec: GridSpec, i0: int, j0: int, setup: CascadeSetup, ts: TrackSet
     silence = np.zeros(M, bool)
     n_un = np.zeros(M, np.int64)
     n_aud = np.zeros(M, np.int64)
+    sil_pen = np.zeros(M)
     culprits = np.zeros(0, np.int64)
     rows = np.flatnonzero(offset)
     if len(rows):
@@ -640,10 +682,11 @@ def run_tile(spec: GridSpec, i0: int, j0: int, setup: CascadeSetup, ts: TrackSet
         expl = (pos[passes.cell[on]], passes.track[on], passes.event[on])
         sr = silence_filter(tile.xyz[rows], dt[rows], setup.events, setup.silence_index, ts.cls, prior, c, p, expl)
         silence[rows] = sr.keep
-        n_un[rows], n_aud[rows] = sr.n_unexplained, sr.n_audible
+        n_un[rows], n_aud[rows], sil_pen[rows] = sr.n_unexplained, sr.n_audible, sr.penalty_nats
         culprits = np.unique(sr.culprit_track)
     sec["silence"] = time.perf_counter() - t0
-    return TileResult(tile, cpa, offset, silence, passes, hyp, best, dt, n_un, n_aud, culprits, sec)
+    return TileResult(tile, cpa, offset, silence, passes, hyp, best, dt, n_un, n_aud, culprits,
+                      silence_penalty=sil_pen, seconds=sec)
 
 
 def iter_cascade(spec: GridSpec, events: Sequence[ObservedEvent], ts: TrackSet, prior: DtPrior,

@@ -91,3 +91,21 @@ def test_recovery_mixed_scenario_with_turns_10db(seed):
         assert abs(e.v_mps / tru.v_mps - 1) <= v_tol
         assert abs(e.d_m / tru.d_m - 1) <= 0.15
         assert abs(e.t0_s - tru.t0_rel_s) <= 1.0
+
+
+def test_dedupe_same_aircraft_half_order_and_speed_gate():
+    from types import SimpleNamespace
+
+    from doppler.classify import ClassifyParams
+    from doppler.fit import _simple_ratio, dedupe_same_aircraft
+
+    def ev(f0, v, d, t, sv):
+        return SimpleNamespace(f0_hz=f0, v_mps=v, d_m=d, t_cpa_received_s=t, sigma={"v_mps": sv})
+
+    cp = ClassifyParams()
+    a, b = ev(123.0, 80.6, 797, 419.96, 0.4), ev(61.6, 80.0, 778, 419.87, 1.1)   # fundamental + half-order
+    c = ev(150.0, 60.0, 500, 100.0, 0.5)                                          # unrelated
+    d = ev(131.0, 80.0, 790, 419.9, 0.4)                                          # different aircraft (ratio 1.065)
+    out = dedupe_same_aircraft([a, b, c, d], cp)
+    assert a in out and b not in out and c in out and d in out
+    assert _simple_ratio(1.5, 0.03) and _simple_ratio(2.0, 0.03) and not _simple_ratio(1.065, 0.03)

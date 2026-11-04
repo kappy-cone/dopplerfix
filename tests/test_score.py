@@ -111,3 +111,14 @@ def test_refine_in_cell_moves_toward_the_mic():
     assert res.refined and res.best.cost < res.score_centre
     assert np.linalg.norm(res.xyz_est - mic) < 15.0
     assert res.best.dt_s == pytest.approx(1.7, abs=0.05)
+
+
+def test_ambiguity_unique_vs_spread_out_ties():
+    p = score.ScoreParams(ambiguity_rel=0.15, ambiguity_radius_m=400.0)
+    base = np.array([6.37e6, 0.0, 0.0])
+    near = [base, base + [0, 150, 0], base + [0, 900, 0]]
+    u = score.ambiguity([1.0, 1.1, 1.5], near, p)
+    assert u["status"] == "unique" and u["n_tied"] == 2 and u["gap_ratio"] == pytest.approx(1.1)
+    a = score.ambiguity([1.0, 1.05, 1.1], near, p)
+    assert a["status"] == "ambiguous" and a["n_tied"] == 3 and a["spread_m"] == pytest.approx(900.0)
+    assert score.ambiguity([], [], p)["status"] == "none"

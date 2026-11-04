@@ -69,6 +69,7 @@ class TrackSpec:
     role: str = "event"
     t_rx_cpa_rel_s: float | None = None
     anchor_enu: tuple[float, float] | None = None
+    accel_frac: float = 0.0              # speed changes by up to ±this through the pass (tanh profile, 30 s)
 
 
 @dataclass
@@ -174,6 +175,13 @@ class Scenario:
     params: SynthParams = field(repr=False)
     decoys: list[DecoyTruth] = field(default_factory=list)
     registry: pd.DataFrame | None = None
+    realism: object = None                # realism.RealismParams used (None = clean)
+    adsb_frame: pd.DataFrame | None = None   # degraded ADS-B table (what the pipeline sees); None = clean
+    adsb_info: dict = field(default_factory=dict)
+    stated_start_s: float | None = None   # start time written to the sidecar (clock error); None = exact
+    c_true: float | None = None           # speed of sound used to synthesise (pipeline uses config c)
+    wind_enu: tuple[float, float] = (0.0, 0.0)
+    aircraft_info: dict = field(default_factory=dict)   # per icao24: role, class, level, min slant, peak SNR
 
     @property
     def event_specs(self) -> list[TrackSpec]:
@@ -206,6 +214,8 @@ def build_track_enu(spec: TrackSpec, mic_enu: NDArray, ground_elev_m: float, t_r
     dt = t_rel - spec.t_cpa_rel_s
     w = np.deg2rad(spec.turn_rate_deg_s)
     psi = psi0 + w * np.clip(dt, -spec.turn_half_s, spec.turn_half_s)
+    if spec.accel_frac:
+        v = v * (1.0 + spec.accel_frac * np.tanh(dt / 30.0))
     vx, vy = v * np.sin(psi), v * np.cos(psi)
     x = np.concatenate([[0.0], np.cumsum(0.5 * (vx[1:] + vx[:-1]) * np.diff(t_rel))])
     y = np.concatenate([[0.0], np.cumsum(0.5 * (vy[1:] + vy[:-1]) * np.diff(t_rel))])
@@ -537,18 +547,37 @@ def tone_power_reference(spec: TrackSpec, truth_d_m: float, noise_band_power: fl
     return noise_band_power * 10 ** (lvl / 10), p.ref_distance_m
 
 
+def received_times(enu: NDArray, mic_enu: NDArray, t_track_rel: NDArray, c: float,
+                   wind_enu: tuple[float, float] = (0.0, 0.0)) -> tuple[NDArray, NDArray, NDArray]:
+    """(t_received, range, unit ray aircraft→mic) with a uniform wind: sound travels at c + w·k̂ along the ray."""
+    rel = mic_enu - enu
+    r = np.linalg.norm(rel, axis=1)
+    k = rel / r[:, None]
+    c_eff = c + k[:, 0] * wind_enu[0] + k[:, 1] * wind_enu[1]
+    return t_track_rel + r / c_eff, r, k
+
+
 def flyover_audio(
     rng: np.random.Generator, spec: TrackSpec, truth: EventTruth, t_track_rel: NDArray, enu: NDArray,
     mic_enu: NDArray, t_audio_rel: NDArray, fs: float, noise_band_power: float, p: SynthParams, c: float,
+    rs=None, rp=None, wind_enu: tuple[float, float] = (0.0, 0.0), ground_rel: float | None = None,
+    level_db: float | None = None,
 ) -> NDArray:
-    """One aircraft at the mic: delayed, Doppler-shifted tones (+ broadband), 1/r + excess attenuation."""
-    r = np.linalg.norm(enu - mic_enu, axis=1)
-    t_r = t_track_rel + r / c
+    """One aircraft at the mic: delayed, Doppler-shifted tones (+ broadband), 1/r + excess attenuation.
+
+    With realism (``rs`` SourceRealism, ``rp`` RealismParams): rich harmonics + half-order comb, RPM walk and
+    ramps, twin-engine detuning, directivity, ISO 9613-1 absorption per harmonic, wind along the ray, and a
+    ground-reflected image path. ``level_db`` (shared level model) overrides the reference level.
+    """
+    from . import realism as rl
+
+    t_r, r, kray = received_times(enu, mic_enu, t_track_rel, c, wind_enu)
     jitter = gaussian_filter1d(rng.standard_normal(t_track_rel.size), sigma=20.0 / p.track_dt_s)
     jitter *= p.f0_jitter_frac / max(np.std(jitter), 1e-12)
-    phase_e = 2 * np.pi * spec.f0_hz * np.concatenate(
-        [[0.0], np.cumsum(0.5 * ((1 + jitter[1:]) + (1 + jitter[:-1])) * np.diff(t_track_rel))]
-    )
+    if rs is not None:
+        jitter = jitter + rl.rpm_profile(rng, t_track_rel, rs, p.track_dt_s)
+    cyc = np.concatenate([[0.0], np.cumsum(0.5 * ((1 + jitter[1:]) + (1 + jitter[:-1])) * np.diff(t_track_rel))])
+    phase_e = 2 * np.pi * spec.f0_hz * cyc
     valid = (t_audio_rel >= t_r[0]) & (t_audio_rel <= t_r[-1])
     tq = t_audio_rel[valid]
     phase = CubicSpline(t_r, phase_e)(tq)
@@ -556,15 +585,70 @@ def flyover_audio(
 
     is_jet = spec.cls == "jet"
     amps = np.asarray(p.jet_harmonic_amps if is_jet else p.harmonic_amps, float)
+    if rs is not None and rp is not None and rp.harmonic_model == "rich":
+        amps = rs.harmonics
     p_ref, r_ref = tone_power_reference(spec, truth.d_m, noise_band_power, p)
+    if level_db is not None:
+        p_ref, r_ref = noise_band_power * 10 ** (level_db / 10), p.ref_distance_m
     a_ref = np.sqrt(2 * p_ref / np.sum(amps**2))
-    gain = (r_ref / rq) * 10 ** (-p.excess_atten_db_per_km * (rq - r_ref) / 1000 / 20)
+    iso = rp is not None and rp.absorption == "iso9613"
+
+    def path_gain(rr, f_hz):
+        if not iso:   # legacy arithmetic, per sample
+            return (r_ref / rr) * 10 ** (-p.excess_atten_db_per_km * (rr - r_ref) / 1000 / 20)
+        # range varies slowly: evaluate on a 25 ms grid and interpolate (path gain per harmonic is the hot spot)
+        step = max(1, int(0.025 * fs))
+        idx = np.arange(0, rr.size, step)
+        if idx[-1] != rr.size - 1:
+            idx = np.r_[idx, rr.size - 1]
+        r_c = rr[idx]
+        g = (r_ref / r_c) * 10 ** (-rl.iso9613_alpha_db_per_m(f_hz, 20.0, rp.humidity_pct) * (r_c - r_ref) / 20)
+        return np.interp(np.arange(rr.size), idx, g)
+
+    dirg = np.ones_like(tq)
+    if rs is not None and rp is not None and rp.directivity_db > 0:
+        vel = np.gradient(enu, t_track_rel, axis=0)
+        cos_e = np.einsum("ij,ij->i", vel, kray) / np.maximum(np.linalg.norm(vel, axis=1), 1e-9)
+        dirg = rl.directivity_gain(np.interp(tq, t_r, cos_e), spec.cls, rs, rp)
+
+    # optional image path (ground reflection): mic mirrored in the ground plane
+    paths = [(phase, rq, 1.0)]
+    if rs is not None and rs.reflection > 0 and ground_rel is not None:
+        img = np.array([mic_enu[0], mic_enu[1], 2 * ground_rel - mic_enu[2]])
+        t_r2, r2, _ = received_times(enu, img, t_track_rel, c, wind_enu)
+        ok2 = (tq >= t_r2[0]) & (tq <= t_r2[-1])
+        ph2 = np.where(ok2, CubicSpline(t_r2, phase_e)(np.clip(tq, t_r2[0], t_r2[-1])), 0.0)
+        paths.append((ph2, np.interp(tq, t_r2, r2), rs.reflection * ok2))
 
     sig = np.zeros_like(tq)
-    for k, a in enumerate(amps, start=1):
-        sig += a * np.sin(k * phase + rng.uniform(0, 2 * np.pi))
+    orders = [(float(k), a) for k, a in enumerate(amps, start=1)]
+    if rs is not None and rs.half_order is not None:
+        orders += [(k - 0.5, a) for k, a in enumerate(rs.half_order, start=1)]
+    twins = [0.0] + ([rs.twin_detune] if rs is not None and rs.twin_detune else [])
+    legacy = rs is None or (len(paths) == 1 and len(twins) == 1 and rs.half_order is None and not iso)
+    if legacy:   # exact legacy arithmetic (bit-identical clean scenarios)
+        for k, a in orders:
+            if k * spec.f0_hz >= fs / 2:
+                continue
+            ph0 = rng.uniform(0, 2 * np.pi)
+            sig += a * path_gain(rq, k * spec.f0_hz) * np.sin(k * phase + ph0)
+    else:        # complex recursion over half-orders: one exp per path/twin instead of one sin per tone
+        kmax = max(k for k, _ in orders)
+        draws = {(k, det): rng.uniform(0, 2 * np.pi) for k, _ in orders for det in twins}
+        for det in twins:
+            for ph, rr, refl in paths:
+                zh = np.exp(0.5j * (1 + det) * ph)       # half-order step
+                z = np.ones_like(zh)
+                amp_by_k = dict(orders)
+                for m in range(1, int(round(2 * kmax)) + 1):
+                    z = z * zh
+                    k = m / 2
+                    if k not in amp_by_k or k * spec.f0_hz >= fs / 2:
+                        continue
+                    sig += refl * amp_by_k[k] * path_gain(rr, k * spec.f0_hz) * np.imag(z * np.exp(1j * draws[(k, det)]))
     out = np.zeros_like(t_audio_rel)
-    out[valid] = a_ref * gain * sig
+    out[valid] = a_ref * dirg * sig
+    gain = path_gain(rq, 1000.0 if is_jet else spec.f0_hz)
     if is_jet:
         # Broadband jet noise, Doppler-warped: sample a source noise process at emission time.
         te_q = CubicSpline(t_r, t_track_rel)(tq)
@@ -583,6 +667,19 @@ def flyover_audio(
 # ---------------------------------------------------------------------------
 # Scenario
 # ---------------------------------------------------------------------------
+def _peak_snr_db(level_db: float, r_min: float, f_hz: float, p: SynthParams, rp) -> float:
+    """Band SNR (tone power vs background band power) at the closest in-clip slant range."""
+    from . import realism as rl
+
+    if not np.isfinite(r_min):
+        return float("-inf")
+    if rp is not None and rp.absorption == "iso9613":
+        att = float(rl.iso9613_alpha_db_per_m(f_hz, 20.0, rp.humidity_pct)) * (r_min - p.ref_distance_m)
+    else:
+        att = p.excess_atten_db_per_km * (r_min - p.ref_distance_m) / 1000
+    return float(level_db - 20 * np.log10(r_min / p.ref_distance_m) - att)
+
+
 def make_scenario(
     params: SynthParams,
     frame: LocalFrame,
@@ -592,24 +689,45 @@ def make_scenario(
     mic_enu: NDArray | None = None,
     specs: list[TrackSpec] | None = None,
     decoy_targets_enu: Sequence[tuple[float, float]] = (),
+    realism=None,
 ) -> Scenario:
     """Build tracks, a hidden mic and the recording. Deterministic given ``params.seed``.
 
     With ``specs`` given they are used as-is (roles from each spec). Otherwise
     events come from ``event_rx_times_s`` (or the legacy even spread), and
-    decoys / twins / background are added per the params.
+    decoys / twins / background are added per the params. ``decoy_targets_enu`` adds one decoy per
+    given point (e.g. cells that survive the cascade's CPA and offset stages),
+    placed with a separate random stream so the rest of the scenario is unchanged.
+    ``realism`` (realism.RealismParams) degrades the scenario towards real data; ``c`` is the speed of
+    sound the *pipeline* will assume (the synth may use a different one, see ``c_mismatch_mps``).
     """
+    from . import realism as rl
+    from .tracks import tracks_to_frame
+
+    rp = realism if realism is not None else rl.RealismParams()
     p = params
     rng = np.random.default_rng(p.seed)
     aux = np.random.default_rng([p.seed, 1])  # non-event placement and types: keeps the event stream stable
+    rrng = np.random.default_rng([p.seed, 3])  # realism: scene-level draws
+    srng = np.random.default_rng([p.seed, 4])  # realism: per-source draws
+    nrng = np.random.default_rng([p.seed, 5])  # realism: scene noise, near traffic
+    arng = np.random.default_rng([p.seed, 6])  # realism: ADS-B degradation
+    c_true = c + (rrng.uniform(-1, 1) * rp.c_mismatch_mps if rp.c_mismatch_mps else 0.0)
+    wspd, wdir = rrng.uniform(0, rp.wind_max_mps), rrng.uniform(0, 2 * np.pi)
+    wind = (float(wspd * np.sin(wdir)), float(wspd * np.cos(wdir))) if rp.wind_max_mps else (0.0, 0.0)
+    h_mic = float(rrng.uniform(*rp.mic_height_range_m)) if rp.mic_height_range_m else p.mic_height_m
+    clock_err = float(rrng.uniform(-1, 1) * rp.clock_offset_max_s) if rp.clock_offset_max_s else 0.0
+
     rad = p.mic_max_offset_m * np.sqrt(rng.uniform())   # always drawn, so a given mic_enu keeps the event stream
     ang = rng.uniform(0, 2 * np.pi)
     if mic_enu is None:
         mic_enu = np.array([rad * np.cos(ang), rad * np.sin(ang), 0.0])
-    mic_enu = np.array([mic_enu[0], mic_enu[1], ground_elev_m + p.mic_height_m - frame.h0], float)
+    mic_enu = np.array([mic_enu[0], mic_enu[1], ground_elev_m + h_mic - frame.h0], float)
     auto = specs is None
     if auto:
         specs = random_event_specs(rng, p) if p.event_rx_times_s is not None else random_track_specs(rng, p)
+        if rp.any_on:
+            specs = rl.perturb_kinematics(rrng, specs, rp)
 
     fs = p.fs_hz
     n = int(round(p.duration_s * fs))
@@ -617,46 +735,96 @@ def make_scenario(
     t_track = np.arange(-p.track_pad_before_s, p.duration_s + p.track_pad_after_s + 1e-9, p.track_dt_s)
     ground_rel = ground_elev_m - frame.h0
 
-    specs = [resolve_rx_time(s, mic_enu, ground_rel, t_track, c) for s in specs]
+    specs = [resolve_rx_time(s, mic_enu, ground_rel, t_track, c_true) for s in specs]
     ev_specs = [s for s in specs if s.role == "event"]
     ev_enu = [build_track_enu(s, mic_enu, ground_rel, t_track) for s in ev_specs]
-    truths = [event_truth(s.icao24, s.f0_hz, t_track, e, mic_enu, c, t_near_s=s.t_cpa_rel_s, cls=s.cls)
+    truths = [event_truth(s.icao24, s.f0_hz, t_track, e, mic_enu, c_true, t_near_s=s.t_cpa_rel_s, cls=s.cls)
               for s, e in zip(ev_specs, ev_enu)]
     decoys: list[DecoyTruth] = []
     if auto:
-        extra, _, decoys = place_non_events(aux, p, ev_specs, ev_enu, truths, mic_enu, ground_rel, t_track, c)
+        extra, _, decoys = place_non_events(aux, p, ev_specs, ev_enu, truths, mic_enu, ground_rel, t_track, c_true)
         specs = specs + extra
     specs = assign_types(aux, specs)
     if len(decoy_targets_enu):
         drng = np.random.default_rng([p.seed, 2])
-        extra, _, more = place_target_decoys(drng, p, decoy_targets_enu, mic_enu, ground_rel, t_track, c)
+        extra, _, more = place_target_decoys(drng, p, decoy_targets_enu, mic_enu, ground_rel, t_track, c_true)
         specs = specs + assign_types(drng, extra)
         decoys = decoys + more
+    if auto and rp.n_near_traffic:
+        near = []
+        for j in range(rp.n_near_traffic):
+            cls = "prop" if nrng.uniform() < 0.6 else "jet"
+            thr = p.threshold(cls)
+            for _ in range(200):
+                d = nrng.uniform(0.5, 1.5) * thr
+                a_ = nrng.uniform(0, 2 * np.pi)
+                anchor = (mic_enu[0] + d * np.cos(a_), mic_enu[1] + d * np.sin(a_))
+                sp = _random_spec(nrng, p, cls, "near", 800 + j, anchor, nrng.uniform(0.0, 1.0) * p.duration_s,
+                                  offset_scale=0.0)
+                sp = resolve_rx_time(sp, mic_enu, ground_rel, t_track, c_true, n_iter=0)
+                ms = min_slant_in_clip(build_track_enu(sp, mic_enu, ground_rel, t_track), t_track, mic_enu,
+                                       c_true, p.duration_s)
+                if 0.5 * thr <= ms <= 1.5 * thr:
+                    near.append(sp)
+                    break
+        specs = specs + assign_types(nrng, near)
 
     noise = colored_noise(rng, n, fs)
     p_noise = band_power(noise, fs, p.noise_band_hz)
     audio = noise.copy()
-    tracks, enus = [], []
+    tracks, enus, info = [], [], {}
     ev_iter = iter(truths)
     for s in specs:
         enu = build_track_enu(s, mic_enu, ground_rel, t_track)
         if s.role == "event":
             tru = next(ev_iter)
         else:
-            tru = event_truth(s.icao24, s.f0_hz, t_track, enu, mic_enu, c, cls=s.cls)
-        if s.role == "event" or min_slant_in_clip(enu, t_track, mic_enu, c, p.duration_s) < p.skip_audio_beyond_m:
-            audio += flyover_audio(rng, s, tru, t_track, enu, mic_enu, t_audio, fs, p_noise, p, c)
+            tru = event_truth(s.icao24, s.f0_hz, t_track, enu, mic_enu, c_true, cls=s.cls)
+        base = np.asarray(p.jet_harmonic_amps if s.cls == "jet" else p.harmonic_amps, float)
+        rs = rl.draw_source(srng, s.cls, rp, base, p.duration_s) if rp.any_on else None
+        level = None
+        r_min = min_slant_in_clip(enu, t_track, mic_enu, c_true, p.duration_s)
+        if rp.level_model == "shared":
+            mean = p.jet_snr_at_ref_db if s.cls == "jet" else p.prop_snr_at_ref_db
+            level = mean + rs.level_offset_db
+            if s.role == "event":   # an event was heard: resample its level until its CPA SNR is detectable
+                for _ in range(50):
+                    if _peak_snr_db(level, tru.d_m, s.f0_hz, p, rp) >= rp.event_min_snr_db:
+                        break
+                    level = mean + float(srng.normal(0, rp.level_sigma_db))
+                else:
+                    level += rp.event_min_snr_db - _peak_snr_db(level, tru.d_m, s.f0_hz, p, rp)
+        audible_enough = r_min < p.skip_audio_beyond_m and (
+            level is None or _peak_snr_db(level, r_min, s.f0_hz, p, rp) > -45.0)
+        if s.role == "event" or audible_enough:
+            audio += flyover_audio(rng, s, tru, t_track, enu, mic_enu, t_audio, fs, p_noise, p, c_true,
+                                   rs, rp if rp.any_on else None, wind, ground_rel, level)
+        lvl_info = level if level is not None else (
+            (p.jet_snr_at_ref_db if s.cls == "jet" else p.prop_snr_at_ref_db) if s.role != "event" else None)
+        info[s.icao24] = {"role": s.role, "cls": s.cls, "level_db_at_ref": lvl_info, "min_slant_in_clip_m": r_min,
+                          "peak_band_snr_db": (_peak_snr_db(lvl_info, r_min, s.f0_hz, p, rp)
+                                               if lvl_info is not None else (p.snr_db if s.role == "event" else None))}
         tr = Track.from_enu(s.icao24, s.callsign, start_time_s + t_track, enu, frame, type_code=s.type_code)
         # velocity in each fix's own local ENU (as ADS-B reports it), not the scenario frame's
         v_ecef = enu_vector_to_ecef(np.gradient(enu, t_track, axis=0), frame.lat0, frame.lon0)
         tr.vel_enu = np.einsum("nij,nj->ni", enu_basis(tr.lat_deg, tr.lon_deg), v_ecef)
         tracks.append(tr)
         enus.append(enu)
+    if rp.noise_model == "realistic":
+        audio += rl.scene_noise(nrng, n, fs, p_noise, rp, bandlimited_noise)
+    audio = rl.recording_chain(audio, fs, rp)
     audio = (0.9 * audio / np.max(np.abs(audio))).astype(np.float32)
     lat, lon, _ = frame.to_geodetic(mic_enu)
+    adsb, adsb_info = None, {}
+    if rp.adsb_degrade:
+        adsb, adsb_info = rl.degrade_adsb(arng, tracks_to_frame(tracks, frame), {s.icao24: s.cls for s in specs},
+                                          rp, protect={s.icao24 for s in ev_specs})
     return Scenario(
         frame=frame, start_time_s=start_time_s, fs_hz=fs, audio=audio, tracks=tracks, track_enu=enus,
         mic_enu=mic_enu, mic_lat=float(lat), mic_lon=float(lon), ground_elev_m=ground_elev_m,
         specs=specs, truth=truths, c=c, params=p, decoys=decoys,
         registry=synthetic_registry(aux, specs, p.unknown_type_frac),
+        realism=rp if rp.any_on else None, adsb_frame=adsb, adsb_info=adsb_info,
+        stated_start_s=start_time_s + clock_err if clock_err else None, c_true=c_true, wind_enu=wind,
+        aircraft_info=info,
     )

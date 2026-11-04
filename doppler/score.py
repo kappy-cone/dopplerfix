@@ -34,6 +34,9 @@ class ScoreParams:
     refine_in_cell: bool = True            # score a cell by its best point within its footprint (sub-cell search)
     refine_max_cells: int = 500            # refine at most this many cells (best by centre score first)
     refine_dt_window_s: float = 3.0        # Δt search half-width around the centre's Δt during refinement
+    silence_weight: float = 1.0            # probabilistic-silence penalty (nats) added to the pooled loss
+    ambiguity_rel: float = 0.15            # PROVISIONAL: candidates within this fraction of the best score are "tied"
+    ambiguity_radius_m: float = 400.0      # tied candidates all within this of rank 1 -> "unique", else "ambiguous"
     allow_shared_tracks: bool = False      # same aircraft assigned to two events (also used by the cascade)
     max_hypotheses_per_cell: int = 64
 
@@ -48,11 +51,18 @@ class CellScore:
     assignment: tuple[int, ...]
     dt_s: float
     f0_hz: NDArray            # (N,)
-    cost: float               # pooled mean Huber loss over every event's ridge points (lower is better)
+    cost: float               # pooled mean Huber loss over the matched events' ridge points (lower is better)
     per_event_cost: NDArray   # (N,)
     n_points: NDArray         # (N,)
-    rms_hz: NDArray           # (N,) RMS residual of modeled points (Hz)
+    rms_hz: NDArray           # (N,) RMS residual of modeled points (Hz); NaN for an unmatched event
     n_missing: NDArray        # (N,) ridge points the track could not model
+    silence_term: float = 0.0 # probabilistic-silence penalty included in ``cost`` (per point)
+    n_unmatched: int = 0      # events this hypothesis leaves without a track
+
+    @property
+    def rank_key(self) -> tuple:
+        """Explain as many events as possible first (lexicographic), then the lowest cost."""
+        return (self.n_unmatched, self.cost)
 
 
 @dataclass(frozen=True)
@@ -148,7 +158,11 @@ def profile_f0(f_obs: NDArray, ratio: NDArray, w: NDArray | None = None) -> floa
 
 def _hyp_cost(dts: NDArray, ridges: list[RidgeObs], tracks: tuple[int, ...], xyz: NDArray, ts: TrackSet,
               start_s: float, c: float, k: float):
-    """Pooled cost for each Δt in ``dts`` (G,), every event sharing that Δt. Returns per-event arrays (N, G)."""
+    """Pooled cost for each Δt in ``dts`` (G,), every event sharing that Δt. Returns per-event arrays (N, G).
+
+    An event with track −1 (unmatched) contributes nothing here; hypotheses are ranked lexicographically
+    by (number of unmatched events, cost), see CellScore.rank_key.
+    """
     N, G = len(ridges), len(dts)
     cost = np.zeros((N, G))
     f0 = np.zeros((N, G))
@@ -156,6 +170,9 @@ def _hyp_cost(dts: NDArray, ridges: list[RidgeObs], tracks: tuple[int, ...], xyz
     miss = np.zeros((N, G), np.int64)
     for e, (rd, k_) in enumerate(zip(ridges, tracks)):
         if len(rd.t_s) == 0:
+            continue
+        if k_ < 0:
+            f0[e], rms[e] = np.nan, np.nan
             continue
         t_rx = start_s + dts[:, None] + rd.t_s[None, :]
         ratio, _, _, _ = modeled_ratio(xyz, k_, ts, t_rx, c)
@@ -173,7 +190,8 @@ def score_hypothesis(hyp: Hypothesis, ridges: list[RidgeObs], ts: TrackSet, xyz:
     if dt_prior is not None:
         lo, hi = max(lo, dt_prior[0]), min(hi, dt_prior[1])
     n_pts = np.array([len(r.t_s) for r in ridges])
-    total = max(int(n_pts.sum()), 1)
+    matched = np.array([k_ >= 0 for k_ in hyp.assignment])
+    total = max(int(n_pts[matched].sum()), 1)
     grid = np.arange(lo, hi + 1e-9, p.dt_coarse_step_s) if hi > lo else np.array([lo])
     cost, *_ = _hyp_cost(grid, ridges, hyp.assignment, xyz, ts, start_time_s, c, p.huber_k)
     j = int(np.argmin(cost.sum(0)))
@@ -187,7 +205,8 @@ def score_hypothesis(hyp: Hypothesis, ridges: list[RidgeObs], ts: TrackSet, xyz:
             best = float(res.x)
     cst, f0, rms, miss = _hyp_cost(np.array([best]), ridges, hyp.assignment, xyz, ts, start_time_s, c, p.huber_k)
     return CellScore(hyp.cell_id, tuple(hyp.assignment), float(best), f0[:, 0], float(cst[:, 0].sum() / total),
-                     cst[:, 0] / np.maximum(n_pts, 1), n_pts, rms[:, 0], miss[:, 0])
+                     cst[:, 0] / np.maximum(n_pts, 1), n_pts, rms[:, 0], miss[:, 0],
+                     n_unmatched=int((~matched).sum()))
 
 
 def score_hypotheses(events: Sequence[ObservedEvent], hyps: Sequence[Hypothesis], ts: TrackSet,
@@ -199,12 +218,12 @@ def score_hypotheses(events: Sequence[ObservedEvent], hyps: Sequence[Hypothesis]
 
 
 def best_per_cell(scores: Sequence[CellScore]) -> list[CellScore]:
-    """Lowest-cost hypothesis per cell, sorted by cost (rank 1 first)."""
+    """Best hypothesis per cell by rank_key, sorted (rank 1 first)."""
     best: dict[int, CellScore] = {}
     for sc in scores:
-        if sc.cell_id not in best or sc.cost < best[sc.cell_id].cost:
+        if sc.cell_id not in best or sc.rank_key < best[sc.cell_id].rank_key:
             best[sc.cell_id] = sc
-    return sorted(best.values(), key=lambda x: x.cost)
+    return sorted(best.values(), key=lambda x: x.rank_key)
 
 
 def _cell_basis(xyz: NDArray) -> NDArray:
@@ -227,7 +246,7 @@ def refine_in_cell(hyp: Hypothesis, ridges: list[RidgeObs], ts: TrackSet, xyz: N
 
     B = _cell_basis(xyz)
     n_pts = np.array([len(r.t_s) for r in ridges])
-    total = max(int(n_pts.sum()), 1)
+    total = max(int(n_pts[[k_ >= 0 for k_ in hyp.assignment]].sum()), 1)
     lo, hi = init.dt_s - p.refine_dt_window_s, init.dt_s + p.refine_dt_window_s
     if dt_prior is not None:
         lo, hi = max(lo, dt_prior[0]), min(hi, dt_prior[1])
@@ -256,7 +275,7 @@ def refine_in_cell(hyp: Hypothesis, ridges: list[RidgeObs], ts: TrackSet, xyz: N
     u, dt = z[:2], float(z[2])
     cst, f0, rms, miss = _hyp_cost(np.array([dt]), ridges, hyp.assignment, pos(u), ts, start_time_s, c, p.huber_k)
     sc = CellScore(hyp.cell_id, tuple(hyp.assignment), dt, f0[:, 0], float(cst[:, 0].sum() / total),
-                   cst[:, 0] / np.maximum(n_pts, 1), n_pts, rms[:, 0], miss[:, 0])
+                   cst[:, 0] / np.maximum(n_pts, 1), n_pts, rms[:, 0], miss[:, 0], n_unmatched=init.n_unmatched)
     if sc.cost > init.cost:                              # never worse than the centre
         return init, np.zeros(2), xyz
     return sc, u, pos(u)
@@ -292,21 +311,51 @@ class CellResult:
     refined: bool
 
 
-def rank_cells(events: Sequence[ObservedEvent], cells: Sequence[tuple[int, NDArray, Sequence[Hypothesis]]],
-               ts: TrackSet, start_time_s: float, c: float, p: ScoreParams,
-               dt_prior: tuple[float, float] | None, half_cell_m: float) -> list[CellResult]:
+def rank_cells(events: Sequence[ObservedEvent], cells: Sequence[tuple], ts: TrackSet, start_time_s: float, c: float,
+               p: ScoreParams, dt_prior: tuple[float, float] | None, half_cell_m: float) -> list[CellResult]:
     """Score every hypothesis of every cell (centre), keep each cell's best, refine the best
-    ``refine_max_cells`` cells within their footprint, and return cells sorted by final score."""
+    ``refine_max_cells`` cells within their footprint, and return cells sorted by final score.
+
+    ``cells``: (cell_id, xyz, hypotheses[, silence_penalty_nats]). The penalty (probabilistic silence) is
+    added to the pooled loss as silence_weight · nats / total ridge points.
+    """
     ridges = prepare_ridges(events, p)
+    total = max(int(sum(len(r.t_s) for r in ridges)), 1)
+    pen = {cl[0]: (float(cl[3]) if len(cl) > 3 else 0.0) * p.silence_weight / total for cl in cells}
     out = []
-    for cell_id, xyz, hyps in cells:
+    for cell_id, xyz, hyps, *_ in cells:
         scs = [score_hypothesis(h, ridges, ts, xyz, start_time_s, c, p, dt_prior) for h in hyps]
-        j = int(np.argmin([s_.cost for s_ in scs]))
+        j = min(range(len(scs)), key=lambda i: scs[i].rank_key)
         out.append(CellResult(cell_id, j, scs[j], scs[j].cost, np.zeros(2), np.asarray(xyz, float), False))
     if p.refine_in_cell:
-        hyps_by = {cid: hyps for cid, _, hyps in cells}
-        for r in sorted(out, key=lambda r: r.score_centre)[:p.refine_max_cells]:
+        hyps_by = {cl[0]: cl[2] for cl in cells}
+        for r in sorted(out, key=lambda r: (r.best.n_unmatched, r.score_centre))[:p.refine_max_cells]:
             sc, off, xyz_r = refine_in_cell(hyps_by[r.cell_id][r.hyp_index], ridges, ts, r.xyz_est, half_cell_m,
                                             start_time_s, c, p, r.best, dt_prior)
             r.best, r.offset_en_m, r.xyz_est, r.refined = sc, off, xyz_r, True
-    return sorted(out, key=lambda r: r.best.cost)
+    for r in out:
+        r.best.silence_term = pen[r.cell_id]
+        r.best.cost += pen[r.cell_id]
+        r.score_centre += pen[r.cell_id]
+    return sorted(out, key=lambda r: r.best.rank_key)
+
+
+def ambiguity(scores: Sequence[float], xyz: Sequence[NDArray], p: ScoreParams,
+              n_unmatched: Sequence[int] | None = None) -> dict:
+    """How decisive the ranking is. ``scores``/``xyz`` sorted best first.
+
+    The tied set is every candidate with score ≤ best·(1 + ambiguity_rel). The result is "unique" when the
+    whole tied set lies within ambiguity_radius_m of rank 1, otherwise "ambiguous" (e.g. a single event,
+    whose locus of equally good cells is long). Returns status, tied-set size and indices, spread, and the
+    rank-2 / rank-1 score ratio.
+    """
+    sc = np.asarray(scores, float)
+    if len(sc) == 0:
+        return {"status": "none", "n_tied": 0, "tied": [], "spread_m": None, "gap_ratio": None}
+    nu = np.zeros(len(sc), int) if n_unmatched is None else np.asarray(n_unmatched, int)
+    tied = np.flatnonzero((sc <= sc[0] * (1.0 + p.ambiguity_rel)) & (nu == nu[0]))
+    X = np.asarray([xyz[k] for k in tied], float)
+    spread = float(np.max(np.linalg.norm(X - X[0], axis=1))) if len(X) else 0.0
+    return {"status": "unique" if spread <= p.ambiguity_radius_m else "ambiguous", "n_tied": int(len(tied)),
+            "tied": tied.tolist(), "spread_m": spread,
+            "gap_ratio": float(sc[1] / sc[0]) if len(sc) > 1 and sc[0] > 0 else None}

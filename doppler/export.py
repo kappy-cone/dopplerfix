@@ -116,8 +116,9 @@ def write_scenario(sc: Scenario, out_dir: Path) -> dict[str, Path]:
         "truth": "truth.json", "gpkg": "truth.gpkg", "registry": "aircraft_db.csv"}.items()}
 
     sf.write(paths["audio"], sc.audio, sc.fs_hz, subtype="PCM_24", format="FLAC")
-    paths["sidecar"].write_text(json.dumps({"mode": "known", "start_utc": _iso(sc.start_time_s)}, indent=1))
-    df = tracks_to_frame(sc.tracks, sc.frame)[SCENARIO_TRACK_COLUMNS]
+    stated = sc.stated_start_s if sc.stated_start_s is not None else sc.start_time_s
+    paths["sidecar"].write_text(json.dumps({"mode": "known", "start_utc": _iso(stated)}, indent=1))
+    df = (sc.adsb_frame if sc.adsb_frame is not None else tracks_to_frame(sc.tracks, sc.frame))[SCENARIO_TRACK_COLUMNS]
     write_parquet(df, paths["tracks"])
     if sc.registry is not None:
         sc.registry.to_csv(paths["registry"], index=False)
@@ -134,6 +135,13 @@ def write_scenario(sc: Scenario, out_dir: Path) -> dict[str, Path]:
         "non_events": [asdict(d) for d in sc.decoys],
         "roles": {s.icao24: s.role for s in sc.specs},
         "synth_params": asdict(sc.params),
+        "realism": None if sc.realism is None else {
+            "params": asdict(sc.realism), "c_true_mps": sc.c_true, "c_pipeline_mps": sc.c,
+            "wind_enu_mps": list(sc.wind_enu), "stated_start_utc": _iso(stated),
+            "clock_error_s": stated - sc.start_time_s, "mic_height_true_m": float(sc.mic_enu[2] + sc.frame.h0
+                                                                                - sc.ground_elev_m),
+            "adsb": sc.adsb_info},
+        "aircraft": sc.aircraft_info,
     }
     paths["truth"].write_text(json.dumps(truth, indent=1, default=float))
 

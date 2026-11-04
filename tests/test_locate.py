@@ -1,5 +1,7 @@
 """End-to-end milestone-4 runs through the CLI: audio analysis -> cascade -> outputs contract."""
 import json
+
+import numpy as np
 import os
 
 import pyogrio
@@ -13,7 +15,7 @@ from doppler import export
 @pytest.fixture(scope="module")
 def scenario_dir(tmp_path_factory):
     d = tmp_path_factory.mktemp("scn")
-    assert cli.main(["synth", "--out", str(d), "--seed", "0", "--event-times", "150,420", "--duration-s", "600",
+    assert cli.main(["synth", "--out", str(d), "--seed", "0", "--event-times", "150,420", "--duration-s", "600", "--clean",
                      "--cascade-decoys", "3"]) == 0
     return d
 
@@ -45,7 +47,8 @@ def test_locate_outputs_contract_and_true_cell(scenario_dir, tmp_path, monkeypat
     assert rj["disk_footprint"]["total_bytes"] < 5_000_000
     assert pyogrio.read_info(run / "results.gpkg", layer="stage_silence")["features"] == s["silence"]
     cands = pyogrio.read_dataframe(run / "results.gpkg", layer="candidates")
-    assert cands["rank"].min() == 1 and cands["score"].notna().all() and cands["f0_e0_hz"].notna().all()
+    top = cands[cands["rank"] == 1].iloc[0]
+    assert cands["score"].notna().all() and np.isfinite(top["f0_e0_hz"]) and top["n_unmatched"] == 0
     with rasterio.open(run / "score.tif") as ds:
         assert ds.crs.to_epsg() == 32613 and ds.tags(ns="IMAGE_STRUCTURE")["LAYOUT"] == "COG"
     for f in ("funnel.png", "spectrogram_top.png", "score_hist.png", "viewer.html"):

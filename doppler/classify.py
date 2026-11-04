@@ -34,6 +34,9 @@ class ClassifyParams:
     jet_min_broadband_rise_db: float = 12.0
     dedupe_dt_s: float = 3.0             # jet-band tone at the same CPA as a prop event = a prop harmonic
     dedupe_v_frac: float = 0.15
+    dedupe_d_frac: float = 0.35          # same-band duplicates: d agrees within this fraction
+    dedupe_ratio_tol: float = 0.03       # ... and f0 ratio within this of a simple ratio p/q (q ≤ 4)
+    min_aircraft_speed_mps: float = 25.0 # PROVISIONAL: slower Doppler sources are ground vehicles, not aircraft
 
     @classmethod
     def from_dict(cls, d: dict) -> "ClassifyParams":

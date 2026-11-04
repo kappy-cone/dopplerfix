@@ -125,6 +125,12 @@ def normalize_frame(df: pd.DataFrame, aliases: dict | None = None) -> pd.DataFra
     else:
         ts = pd.to_datetime(t, utc=True, format="ISO8601")
         df["t_s"] = (ts - pd.Timestamp(0, tz="UTC")).dt.total_seconds()
+    # OpenSky state vectors: `time` is the snapshot time; the position itself is from `lastposupdate`
+    # (it can be seconds older). Use the position time, and drop repeated stale positions.
+    if "lastposupdate" in df.columns:
+        lpu = pd.to_numeric(df["lastposupdate"], errors="coerce")
+        df["t_s"] = np.where(np.isfinite(lpu), lpu, df["t_s"])
+        df = df.drop_duplicates(subset=["icao24", "t_s"], keep="first") if "icao24" in df.columns else df
     df["icao24"] = df["icao24"].astype(str).str.strip().str.lower()
     df["callsign"] = df["callsign"].fillna("").astype(str).str.strip()
     return df

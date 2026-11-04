@@ -15,7 +15,7 @@ from doppler.tracks import TRACK_COLUMNS
 def test_synth_cli_writes_scenario_and_events_roundtrip(tmp_path, capsys):
     out = tmp_path / "scn"
     assert cli.main(["synth", "--config", "config.yaml", "--out", str(out), "--seed", "3",
-                     "--event-times", "60,220", "--duration-s", "300", "--cascade-decoys", "0"]) == 0
+                     "--event-times", "60,220", "--duration-s", "300", "--cascade-decoys", "0", "--clean"]) == 0
     for name in ("audio.flac", "audio.json", "tracks.parquet", "truth.json", "truth.gpkg",
                  "diagnostic.png", "aircraft_db.csv"):
         assert (out / name).stat().st_size > 0, name

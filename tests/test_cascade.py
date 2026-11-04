@@ -16,6 +16,8 @@ from .conftest import FRAME, START
 
 CFG = cli.load_config("config.yaml")
 P = cs.CascadeParams.from_dict({**CFG["cascade"], "tile_cells": 24})
+STRICT = dict(max_unmatched_events=0, silence_audibility="hard")   # milestone-4 semantics
+PH = cs.CascadeParams.from_dict({**CFG["cascade"], "tile_cells": 24, **STRICT})
 C = 343.4
 
 
@@ -122,7 +124,7 @@ def test_offset_filter_is_shared_dt_interval_intersection_for_n_events():
     # cell 2: event 1 has two candidate passes; only one is consistent
     pt = _pass_table([0, 0, 0, 1, 1, 1, 2, 2, 2, 2], [0, 1, 2, 0, 1, 2, 0, 1, 1, 2],
                      [0, 1, 2, 0, 1, 2, 0, 1, 3, 2], [2.0, 2.5, 1.5, 2.0, 2.5, -8.0, 0.0, 9.0, 0.5, 0.3], 1.0)
-    keep, hyp = cs.offset_filter(pt, 3, 3, icao, prior, cs.CascadeParams())
+    keep, hyp = cs.offset_filter(pt, 3, 3, icao, prior, cs.CascadeParams(max_unmatched_events=0))
     assert keep.tolist() == [True, False, True]
     h0 = hyp.take(np.flatnonzero(hyp.cell == 0))
     assert len(h0) == 1 and h0.tracks[0].tolist() == [0, 1, 2]
@@ -131,19 +133,44 @@ def test_offset_filter_is_shared_dt_interval_intersection_for_n_events():
     assert h2.tracks.tolist() == [[0, 3, 2]]
     # N = 2 reduces to the pairwise offset test: |Δ(dtc)| ≤ tol1 + tol2
     pt2 = _pass_table([0, 0, 1, 1], [0, 1, 0, 1], [0, 1, 0, 1], [0.0, 1.9, 0.0, 2.1], 1.0)
-    keep2, _ = cs.offset_filter(pt2, 2, 2, icao, prior, cs.CascadeParams())
+    keep2, _ = cs.offset_filter(pt2, 2, 2, icao, prior, cs.CascadeParams(max_unmatched_events=0))
     assert keep2.tolist() == [True, False]
     # prior bounds Δt
     pt3 = _pass_table([0, 0], [0, 1], [0, 1], [11.5, 11.5], 1.0)
-    assert not cs.offset_filter(pt3, 1, 2, icao, prior, cs.CascadeParams())[0][0]
+    assert not cs.offset_filter(pt3, 1, 2, icao, prior, cs.CascadeParams(max_unmatched_events=0))[0][0]
 
 
 def test_offset_filter_forbids_shared_aircraft_unless_allowed():
     prior = cs.DtPrior(0.0, -10.0, 10.0, 60.0)
     icao = np.array(["a", "a", "b"], object)            # tracks 0 and 1 are segments of one aircraft
     pt = _pass_table([0, 0], [0, 1], [0, 1], [0.0, 0.0], 1.0)
-    assert not cs.offset_filter(pt, 1, 2, icao, prior, cs.CascadeParams())[0][0]
-    assert cs.offset_filter(pt, 1, 2, icao, prior, cs.CascadeParams(allow_shared_tracks=True))[0][0]
+    assert not cs.offset_filter(pt, 1, 2, icao, prior, cs.CascadeParams(max_unmatched_events=0))[0][0]
+    assert cs.offset_filter(pt, 1, 2, icao, prior, cs.CascadeParams(max_unmatched_events=0, allow_shared_tracks=True))[0][0]
+
+
+def test_offset_filter_allows_up_to_k_unmatched_events():
+    prior = cs.DtPrior(0.0, -10.0, 10.0, 60.0)
+    icao = np.array(["a", "b", "c"], object)
+    # events 0/1 agree; event 2 has no consistent pass (a car, or an aircraft without ADS-B)
+    pt = _pass_table([0, 0, 0], [0, 1, 2], [0, 1, 2], [2.0, 2.5, -8.0], 1.0)
+    keep0, _ = cs.offset_filter(pt, 1, 3, icao, prior, cs.CascadeParams(max_unmatched_events=0))
+    keep1, hyp = cs.offset_filter(pt, 1, 3, icao, prior, cs.CascadeParams(max_unmatched_events=1))
+    assert not keep0[0] and keep1[0]
+    assert [0, 1, -1] in hyp.tracks.tolist()
+    # unmatched hypotheses carry a worse interim cost than fully matched ones
+    pt_all = _pass_table([0, 0, 0], [0, 1, 2], [0, 1, 2], [2.0, 2.5, 2.2], 1.0)
+    _, h = cs.offset_filter(pt_all, 1, 3, icao, prior, cs.CascadeParams(max_unmatched_events=1))
+    full = h.cost[[t == [0, 1, 2] for t in h.tracks.tolist()]]
+    part = h.cost[[-1 in t for t in h.tracks.tolist()]]
+    assert full.min() < part.min()
+
+
+def test_probabilistic_silence_penalises_soft_and_rejects_near_certain():
+    from scipy.stats import norm
+
+    p = cs.CascadeParams(silence_audibility="probabilistic", silence_level_sigma_db=6.0, silence_hard_prob=0.99)
+    # P(audible) at r = thr/2 is Φ(6.02/6) ≈ 0.84 -> penalty only; at r = thr/5, Φ(2.33) ≈ 0.99 -> reject
+    assert norm.cdf(20 * np.log10(2.0) / 6) < 0.99 < norm.cdf(20 * np.log10(5.2) / 6)
 
 
 def test_cpa_refinement_finds_closest_point_between_samples():
@@ -213,14 +240,14 @@ def test_cascade_decoys_are_removed_by_silence(seed):
     ts = tracks.build_trackset(prep, START - 120, START + 180, 0.25)
     spec = geo.make_grid_spec(region_circle(), 200.0, P.tile_cells)
     cands = np.concatenate([FRAME.ecef_to_enu(r.tile.xyz[r.offset])[:, :2]
-                            for r in cs.iter_cascade(spec, ev, ts, prior, geo.FlatDEM(1600.0), 1.5, C, P)])
+                            for r in cs.iter_cascade(spec, ev, ts, prior, geo.FlatDEM(1600.0), 1.5, C, PH)])
     targets = cli.choose_decoy_targets(cands, sc0.mic_enu, sc0.params, 3)
     assert targets, "single-event scenarios have survivors far from the mic"
     sc = synth.make_scenario(sc0.params, FRAME, START, 1600.0, C, mic_enu=sc0.mic_enu, decoy_targets_enu=targets)
     assert [t.t_cpa_received_rel_s for t in sc.truth] == pytest.approx([t.t_cpa_received_rel_s for t in sc0.truth])
     placed = [d for d in sc.decoys if d.icao24 and d.role == "decoy" and d.event_index is None]
     assert placed
-    counts, true_cell, tcells = run(sc, truth_events(sc), targets=[d.target_enu for d in placed])
+    counts, true_cell, tcells = run(sc, truth_events(sc), p=PH, targets=[d.target_enu for d in placed])
     assert true_cell[:3] == (True, True, True)
     for k, st in tcells.items():
         assert st[1] and not st[2] and st[3] >= 1, (k, st)   # reached the silence stage, rejected there
@@ -229,8 +256,8 @@ def test_cascade_decoys_are_removed_by_silence(seed):
 def test_silence_count_mode_keeps_cells_but_counts():
     sc = scenario(3, 120.0, (60.0,))
     ev = truth_events(sc)
-    a, _, _ = run(sc, ev)
-    b, _, _ = run(sc, ev, p=cs.CascadeParams.from_dict({**P.__dict__, "silence_mode": "count"}))
+    a, _, _ = run(sc, ev, p=PH)
+    b, _, _ = run(sc, ev, p=cs.CascadeParams.from_dict({**PH.__dict__, "silence_mode": "count"}))
     assert b["silence"] == b["offset"] == a["offset"] and a["silence"] <= a["offset"]
 
 

@@ -125,6 +125,9 @@ classify:
   jet_min_broadband_rise_db: 12.0
   dedupe_dt_s: 3.0
   dedupe_v_frac: 0.15
+  dedupe_d_frac: 0.35         # same aircraft on two tone families (fundamental / half-order / harmonic)
+  dedupe_ratio_tol: 0.03
+  min_aircraft_speed_mps: 25.0   # PROVISIONAL: slower Doppler sources are ground vehicles
 
 tracks:
   source: csv                # csv | parquet | opensky (milestone 7)
@@ -159,6 +162,7 @@ cascade:
   height_sys_m: 30.0         # PROVISIONAL: DEM + geoid + ADS-B geometric altitude error
   timing_sys_s: 1.0          # PROVISIONAL: straight-line t0 bias on curved/climbing tracks
   baro_alt_tol_m: 150.0      # extra height allowance for barometric-altitude tracks
+  gof_widening: true         # σ × max(1, fit rms / ridge noise): reduced-χ² scaling for systematic misfit
   tile_cells: 128            # grid tile edge (cells); the full grid is never built at once
   window_pad_s: 2.0
   prune_height_margin_m: 5000.0   # tile-pruning bound on ground height (not a tolerance)
@@ -170,6 +174,10 @@ cascade:
   silence_min_audible_s: 20.0   # PROVISIONAL: in-clip audible time for a pass to be expected (≈ detect.min_duration_s)
   silence_dt_s: 1.0          # track decimation for the silence index
   explain_time_tol_s: 20.0
+  silence_audibility: probabilistic   # probabilistic: reject only near-certain misses, penalise the rest | hard: slant < threshold
+  silence_level_sigma_db: 6.0   # PROVISIONAL: source-level scatter (dB) about the class audibility threshold
+  silence_hard_prob: 0.99       # reject a cell when an unexplained pass is audible with at least this probability
+  max_unmatched_events: 1       # events allowed without a track (cars, birds, aircraft without ADS-B)
   silence_explain: cpa        # cpa: an audible pass is explained only by a CPA-consistent pass of that track | time: by any compatible event in time (lenient)
 
 score:                       # locked N-event scoring: one shared Δt, one f0 per event
@@ -182,6 +190,9 @@ score:                       # locked N-event scoring: one shared Δt, one f0 pe
   refine_in_cell: true       # cell score = best point inside the cell (±half spacing), not its centre
   refine_max_cells: 500      # refine the best N cells by centre score
   refine_dt_window_s: 3.0    # Δt half-width around the centre's Δt while refining
+  silence_weight: 1.0        # probabilistic-silence penalty (nats) added to the pooled loss
+  ambiguity_rel: 0.15        # PROVISIONAL: candidates within 15% of the best score are tied
+  ambiguity_radius_m: 400.0  # tied set within this of rank 1 -> unique, else ambiguous
   allow_shared_tracks: false # forbid assigning one aircraft to two events
   max_hypotheses_per_cell: 64
 
@@ -211,9 +222,9 @@ synth:
   noise_band_hz: [40, 1000]
   harmonic_amps: [1.0, 0.5, 0.3]
   f0_range_hz: [80, 180]
-  speed_range_mps: [55, 90]
+  speed_range_mps: [35, 90]
   alt_agl_range_m: [300, 900]
-  offset_range_m: [150, 1200]
+  offset_range_m: [0, 1500]     # 0 = directly overhead
   jet_f0_range_hz: [900, 2200]
   jet_harmonic_amps: [1.0, 0.3]
   jet_speed_range_mps: [75, 130]
@@ -240,3 +251,63 @@ synth:
   track_pad_after_s: 60.0
   mic_max_offset_m: 3000.0
   # audible_slant_m and region_radius_m come from cascade: and region:
+
+# Realism layer for synthetic scenarios (doppler/realism.py): what real recordings and ADS-B do that a
+# clean forward model doesn't (skeptic review, session 3). Scenario settings, not pipeline thresholds.
+# `cli.py synth --clean` turns every effect off (the milestone 1-5 scenarios).
+realism:
+  adsb_degrade: true
+  adsb_interval_s: 1.0
+  adsb_interval_jitter_s: 0.3
+  adsb_latency_s: 0.6
+  adsb_pos_sigma_m: 7.0
+  adsb_mlat_frac: 0.03
+  adsb_mlat_sigma_m: 100.0
+  adsb_geo_alt_sigma_m: 10.0
+  adsb_alt_quant_ft: 25.0
+  adsb_baro_only_frac_prop: 0.3
+  adsb_baro_offset_sigma_m: 60.0
+  adsb_speed_quant_kt: 1.0
+  adsb_vrate_quant_fpm: 64.0
+  adsb_gap_rate_per_min: 0.2
+  adsb_gap_s: [5.0, 60.0]
+  adsb_drop_prop_frac: 0.0
+  level_model: shared
+  level_sigma_db: 6.0
+  event_min_snr_db: 0.0
+  harmonic_model: rich
+  n_harmonics: 10
+  harmonic_slope_db: -3.0
+  harmonic_scatter_db: 6.0
+  half_order_db: -12.0
+  rpm_walk_frac: 0.003
+  rpm_ramp_prob: 0.3
+  rpm_ramp_frac: [0.03, 0.1]
+  twin_prob: 0.3
+  twin_detune_frac: [0.002, 0.01]
+  directivity_db: 6.0
+  absorption: iso9613
+  humidity_pct: 70.0
+  ground_reflection: true
+  reflection_coef: [0.8, 1.0]
+  wind_max_mps: 10.0
+  c_mismatch_mps: 3.0
+  noise_model: realistic
+  wind_noise_db: 6.0
+  hum_db: -10.0
+  n_car_passes: 2
+  car_db: 10.0
+  n_bird_chirps: 20
+  bird_db: 0.0
+  highpass_hz: 100.0
+  agc_strength: 0.5
+  clock_offset_max_s: 5.0
+  corridor_frac: 0.5
+  corridor_spread_deg: 20.0
+  climb_prob: 0.4
+  climb_mps: [3.0, 5.0]
+  speed_ramp_prob: 0.3
+  speed_ramp_frac: 0.1
+  turn_rate_max_deg_s: 3.0
+  n_near_traffic: 4
+  mic_height_range_m: [1.0, 10.0]

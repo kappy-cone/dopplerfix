@@ -292,21 +292,27 @@ def cmd_synth(args) -> int:
     c = speed_of_sound_from(cfg)
     ground = section(cfg, "region").get("ground_elev_m", 0.0)
     frame = LocalFrame(frame0.lat0, frame0.lon0, ground)
-    sc = synth.make_scenario(params, frame, tp.start_s, ground, c)
+    from doppler import realism as rl
+
+    rp = rl.RealismParams() if args.clean else rl.RealismParams.from_dict(section(cfg, "realism"))
+    sc = synth.make_scenario(params, frame, tp.start_s, ground, c, realism=rp)
     n_dec = params.n_cascade_decoys if args.cascade_decoys is None else args.cascade_decoys
     targets = []
     if n_dec > 0:
         # Decoys over cells that survive CPA + offset (far enough from the mic): only the silence filter can
         # remove those cells, so they test it. Built with a separate random stream; events are unchanged.
         _, fits0 = run_events(sc.audio, sc.fs_hz, cfg, c)
-        prep = tracks.prepare_tracks(sc.tracks, tracks.TrackParams.from_dict(section(cfg, "tracks")))
+        tp_ = tracks.TrackParams.from_dict(section(cfg, "tracks"))
+        src = sc.adsb_frame if sc.adsb_frame is not None else None
+        prep = (tracks.prepare_tracks(tracks.tracks_from_frame(src, tp_), tp_) if src is not None
+                else tracks.prepare_tracks(sc.tracks, tp_))
         classify_tracks(cfg, prep, sc.registry)
         cands = offset_survivors_enu(cfg, fits0, prep, tp, params.duration_s, c, region, frame, FlatDEM(ground),
                                      params.mic_height_m)
         targets = choose_decoy_targets(cands, sc.mic_enu, params, n_dec)
         if targets:
             sc = synth.make_scenario(params, frame, tp.start_s, ground, c, mic_enu=sc.mic_enu,
-                                     decoy_targets_enu=targets)
+                                     decoy_targets_enu=targets, realism=rp)
         print(f"cascade decoys: {len(targets)} of {n_dec} placed over CPA/offset survivors "
               f"({len(cands)} survivors, feasible need ≥ "
               f"{(params.inaudible_margin - params.decoy_target_slant_frac) * params.threshold('prop'):.0f} m from mic)")
@@ -547,11 +553,12 @@ def cmd_locate(args) -> int:
                 "xyz": tile.xyz[h].copy(), "interim_cost": float(cost[h]), "dt_s": float(r.dt_s[h]),
                 "dt_lo_s": float(r.hypotheses.dt_lo_s[b]), "dt_hi_s": float(r.hypotheses.dt_hi_s[b]),
                 "tracks": [int(k_) for k_ in r.hypotheses.tracks[b]], "n_hypotheses": n_h,
-                "n_audible": int(r.n_audible[h]),
+                "n_audible": int(r.n_audible[h]), "sil_pen": float(r.silence_penalty[h]),
                 "hyps": [(cascade.Hypothesis(int(spec.cell_ids(tile.i[h], tile.j[h])),
                                              tuple(int(k_) for k_ in r.hypotheses.tracks[q_]),
                                              (float(r.hypotheses.dt_lo_s[q_]), float(r.hypotheses.dt_hi_s[q_]))),
-                          [{"t_emit_s": float(r.passes.t_emit_s[q]), "r_m": float(r.passes.r_cpa_m[q]),
+                          [None if q < 0 else
+                           {"t_emit_s": float(r.passes.t_emit_s[q]), "r_m": float(r.passes.r_cpa_m[q]),
                             "speed_mps": float(r.passes.speed_mps[q]), "pos": r.passes.pos[q].copy()}
                            for q in r.hypotheses.passes[q_]])
                          for q_ in np.flatnonzero(r.hypotheses.cell == h)],
@@ -568,7 +575,8 @@ def cmd_locate(args) -> int:
     t = _time.perf_counter()
     sp = score.ScoreParams.from_dict(section(cfg, "score"))
     by_id = {d["cell_id"]: d for d in surv}
-    ranked = score.rank_cells(events, [(d["cell_id"], d["xyz"], [h for h, _ in d["hyps"]]) for d in surv], ts,
+    ranked = score.rank_cells(events, [(d["cell_id"], d["xyz"], [h for h, _ in d["hyps"]], d["sil_pen"])
+                                       for d in surv], ts,
                               prior.start_s, c, sp, (prior.dt_lo_s, prior.dt_hi_s), 0.5 * spec.spacing_m)
     n_scored = sum(len(d["hyps"]) for d in surv)
     for r in ranked:
@@ -576,15 +584,18 @@ def cmd_locate(args) -> int:
         h, cp_ = d["hyps"][r.hyp_index]
         sc = r.best
         la, lo_, _ = geo.ecef_to_geodetic(r.xyz_est)
-        cpa = ([score.cpa_geometry(r.xyz_est, k_, ts, cp0["t_emit_s"]) for k_, cp0 in zip(sc.assignment, cp_)]
-               if r.refined else cp_)
+        cpa = ([None if k_ < 0 else score.cpa_geometry(r.xyz_est, k_, ts, cp0["t_emit_s"])
+                for k_, cp0 in zip(sc.assignment, cp_)] if r.refined else cp_)
         d.update(score=sc.cost, score_centre=r.score_centre, dt_s=sc.dt_s, dt_lo_s=h.dt_bounds_s[0],
                  dt_hi_s=h.dt_bounds_s[1], tracks=list(sc.assignment), cpa=cpa, f0=sc.f0_hz, rms=sc.rms_hz,
                  n_missing=sc.n_missing, est_lat=float(la), est_lon=float(lo_),
                  est_offset_m=float(np.hypot(*r.offset_en_m)), refined=r.refined, xyz_est=r.xyz_est)
-    surv.sort(key=lambda d: d["score"])
+    surv.sort(key=lambda d: (sum(k_ < 0 for k_ in d["tracks"]), d["score"]))
     for k_, d in enumerate(surv, 1):
         d["rank"] = k_
+    amb = score.ambiguity([d["score"] for d in surv], [d["xyz_est"] for d in surv], sp,
+                          [sum(k_ < 0 for k_ in d["tracks"]) for d in surv])
+    tied_ids = {surv[k_]["cell_id"] for k_ in amb["tied"]}
     timings["score_s"] = _time.perf_counter() - t
     timings["n_hypotheses_scored"] = n_scored
     t = _time.perf_counter()
@@ -601,12 +612,15 @@ def cmd_locate(args) -> int:
             "score_centre": np.array([d["score_centre"] for d in surv], np.float32),
             "est_lat": [d["est_lat"] for d in surv], "est_lon": [d["est_lon"] for d in surv],
             "est_offset_m": np.array([d["est_offset_m"] for d in surv], np.float32),
-            "refined": [d["refined"] for d in surv]}
+            "refined": [d["refined"] for d in surv],
+            "tied_with_rank1": [d["cell_id"] in tied_ids for d in surv]}
     for e in range(N):
         cand[f"f0_e{e}_hz"] = np.array([d["f0"][e] for d in surv], np.float32)
         cand[f"rms_e{e}_hz"] = np.array([d["rms"][e] for d in surv], np.float32)
-        cand[f"track_e{e}"] = [str(ts.icao24[d["tracks"][e]]) for d in surv]
-        cand[f"callsign_e{e}"] = [str(ts.callsign[d["tracks"][e]]) for d in surv]
+        cand[f"track_e{e}"] = [str(ts.icao24[d["tracks"][e]]) if d["tracks"][e] >= 0 else "" for d in surv]
+        cand[f"callsign_e{e}"] = [str(ts.callsign[d["tracks"][e]]) if d["tracks"][e] >= 0 else "" for d in surv]
+    cand["n_unmatched"] = [sum(k_ < 0 for k_ in d["tracks"]) for d in surv]
+    cand["silence_nats"] = np.array([d["sil_pen"] for d in surv], np.float32)
     buf.add("candidates", gpd.GeoDataFrame(cand, geometry=[Point(d["est_lon"], d["est_lat"]) for d in surv],
                                            crs="EPSG:4326"))
 
@@ -614,6 +628,8 @@ def cmd_locate(args) -> int:
                      "r_cpa_m": [], "alt_m": []}
     for d in surv:
         for e, (k_, cp_) in enumerate(zip(d["tracks"], d["cpa"])):
+            if k_ < 0 or cp_ is None:
+                continue
             la, lo, hh = geo.ecef_to_geodetic(cp_["pos"])
             pts.append(Point(float(lo), float(la)))
             for key, val in (("cell_id", d["cell_id"]), ("rank", d["rank"]), ("event", e),
@@ -623,7 +639,7 @@ def cmd_locate(args) -> int:
                 prow[key].append(val)
     buf.add("event_cpa_points", gpd.GeoDataFrame(prow, geometry=pts, crs="EPSG:4326"))
 
-    assigned = {k_ for d in surv for k_ in d["tracks"]}
+    assigned = {k_ for d in surv for k_ in d["tracks"] if k_ >= 0}
     ktracks = sorted(assigned | culprits)
     lines, trow = [], {"icao24": [], "callsign": [], "class": [], "type_code": [], "alt_source": [], "role": [],
                        "n_candidates": []}
@@ -700,10 +716,17 @@ def cmd_locate(args) -> int:
         err = g.inv(truth["mic"]["lon"], truth["mic"]["lat"], best["est_lon"], best["est_lat"])[2] if best else None
         err_c = g.inv(truth["mic"]["lon"], truth["mic"]["lat"], best["lon"], best["lat"])[2] if best else None
         ib = min(surv, key=lambda d: d["interim_rank"]) if surv else None
+        # match each truth event to the detected event nearest in received CPA time (realistic scenes can
+        # contain extra audible aircraft, which become extra events)
+        match = []
+        for te in truth["events"]:
+            k_ = int(np.argmin([abs(e.t_rx_s - te["t_cpa_received_rel_s"]) for e in events]))
+            match.append(k_ if abs(events[k_].t_rx_s - te["t_cpa_received_rel_s"]) < 10 else None)
         true_assign = None
         if tc_ is not None:
-            ev_icao = [e["icao24"] for e in truth["events"]]
-            true_assign = [str(ts.icao24[k_]) for k_ in tc_["tracks"]]
+            true_assign = [None if (k_ is None or tc_["tracks"][k_] < 0) else str(ts.icao24[tc_["tracks"][k_]])
+                           for k_ in match]
+        clock_err = (truth.get("realism") or {}).get("clock_error_s", 0.0) or 0.0
         truth_eval = {"true_cell_id": tid, "true_cell_ij": true_ij, "true_cell_reached": true_stage,
                       "survived_all_stages": true_stage == "silence",
                       "rank": tc_["rank"] if tc_ else None, "score": tc_["score"] if tc_ else None,
@@ -712,8 +735,13 @@ def cmd_locate(args) -> int:
                       "rank_by_centre_score": (sorted(surv, key=lambda d: d["score_centre"]).index(tc_) + 1) if tc_ else None,
                       "true_cell_assignment": true_assign,
                       "true_cell_assignment_correct": (true_assign is not None and
-                                                       sorted(true_assign) == sorted(e["icao24"] for e in truth["events"])),
+                                                       true_assign == [e["icao24"] for e in truth["events"]]),
+                      "truth_events_detected": sum(k_ is not None for k_ in match),
+                      "extra_events": len(events) - sum(k_ is not None for k_ in match),
+                      "rank1_dt_error_s": (best["dt_s"] + clock_err) if best else None,
                       "interim_rank": tc_["interim_rank"] if tc_ else None,
+                      "ambiguity": amb["status"], "true_cell_in_tied_set": tid in tied_ids,
+                      "correct": bool(tc_ is not None and tc_["rank"] == 1 and amb["status"] == "unique"),
                       "interim_rank1_error_m": g.inv(truth["mic"]["lon"], truth["mic"]["lat"], ib["lon"], ib["lat"])[2]
                       if ib else None}
 
@@ -743,6 +771,7 @@ def cmd_locate(args) -> int:
         "n_tracks": {"prepared_segments": len(prepared), "in_trackset": ts.n_tracks,
                      "assigned": len(assigned), "silence_culprits": len(culprits)},
         "survivors": counts,
+        "ambiguity": {k_: v for k_, v in amb.items() if k_ != "tied"},
         "silence_removed": counts["offset"] - counts["silence"],
         "layers": layer_rows, "score_raster": ras, "plots": plots,
         "timings_s": timings, "truth_eval": truth_eval,
@@ -763,9 +792,12 @@ def cmd_locate(args) -> int:
               f"(interim {truth_eval['interim_rank']}); rank-1 error "
               f"{truth_eval['rank1_error_m'] and round(truth_eval['rank1_error_m'])} m; "
               f"assignment correct: {truth_eval['true_cell_assignment_correct']}")
+    print(f"  ranking: {amb['status']} ({amb['n_tied']} tied within {sp.ambiguity_rel:.0%}, spread "
+          f"{amb['spread_m'] and round(amb['spread_m'])} m, rank-2/rank-1 {amb['gap_ratio'] and round(amb['gap_ratio'], 2)})")
     for d in surv[:3]:
         print(f"  #{d['rank']} {d['est_lat']:.5f},{d['est_lon']:.5f} score {d['score']:.3f} Δt {d['dt_s']:+.2f}s "
-              f"tracks {[str(ts.icao24[k_]) for k_ in d['tracks']]} rms {np.round(d['rms'], 2).tolist()} Hz")
+              f"tracks {[str(ts.icao24[k_]) if k_ >= 0 else '—' for k_ in d['tracks']]} "
+              f"rms {np.round(d['rms'], 2).tolist()} Hz silence {d['sil_pen']:.1f} nats")
     if info["manual_inputs"]:
         print(f"  NOTE: manual inputs used {sorted(info['manual_inputs'])}: not a fully automated run")
     print(f"  time {timings['total_s']:.1f}s (events {timings['events_s']:.1f}, cascade "
@@ -806,6 +838,7 @@ def main(argv=None) -> int:
     s.add_argument("--duration-s", dest="duration_s", type=float)
     s.add_argument("--event-times", dest="event_times", help="received CPA times, e.g. 40,960")
     s.add_argument("--event-classes", dest="event_classes", help="e.g. prop,jet")
+    s.add_argument("--clean", action="store_true", help="no realism layer (ideal ADS-B, clean source and path)")
     s.add_argument("--cascade-decoys", dest="cascade_decoys", type=int,
                    help="decoys over CPA/offset survivors (default synth.n_cascade_decoys; 0 disables)")
     s.set_defaults(func=cmd_synth)

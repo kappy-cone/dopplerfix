@@ -48,7 +48,7 @@ def plot_scenario(sc: Scenario, spec: Spectrogram, fits: list[EventFit], path: P
 
     # Plan view.
     axm = fig.add_subplot(gs[1, 0])
-    style = {"decoy": ("--", 0.9), "twin": (":", 0.7), "background": (":", 0.4)}
+    style = {"decoy": ("--", 0.9), "twin": (":", 0.7), "background": (":", 0.4), "near": ("-.", 0.8)}
     for enu, s in zip(sc.track_enu, sc.specs):
         if s.role != "event":
             ls, a = style[s.role]
@@ -194,6 +194,9 @@ def candidate_view(d: dict, events, ts, prior, c: float, spec=None, step_s: floa
     span = max(abs(d["dt_lo_s"] - d["dt_s"]), abs(d["dt_hi_s"] - d["dt_s"])) + 2.0
     curves = []
     for e, (ev, k_, cp) in enumerate(zip(events, d["tracks"], d["cpa"])):
+        if k_ < 0 or cp is None:
+            curves.append(None)       # event left unmatched by this candidate
+            continue
         tt = np.arange(ev.ridge_t_s.min() - 30 - span, ev.ridge_t_s.max() + 30 + span, step_s)
         ratio, _, _, ok = modeled_ratio(d.get("xyz_est", d["xyz"]), k_, ts, prior.start_s + d["dt_s"] + tt, c)
         f0, v, dist = float(d["f0"][e]), float(cp["speed_mps"]), float(cp["r_m"])
@@ -347,23 +350,24 @@ let S={},logC=[];
 function ratioAt(cur,tau){const u=(tau-cur.t0_s)/cur.step_s,i=Math.floor(u);if(i<0||i+1>=cur.ratio.length)return null;
  const a=cur.ratio[i],b=cur.ratio[i+1];if(a===null||b===null)return null;return a+(b-a)*(u-i);}
 function liveScore(c){let tot=0,n=0;const per=[];c.curves.forEach((cur,e)=>{const R=D.events[e].ridge,sh=S.dt-c.dt_s;let ce=0,ss=0,m=0,miss=0;
+ if(!cur){per.push({cost:NaN,rms:NaN,miss:0,unmatched:true});return;}
  R.t.forEach((t,i)=>{const r=ratioAt(cur,t+sh);if(r===null){ce+=D.miss_cost;miss++;return;}const res=R.f[i]-S.f0[e]*r;ce+=huber(res/R.sigma);ss+=res*res;m++;});
  tot+=ce;n+=R.t.length;per.push({cost:ce/Math.max(R.t.length,1),rms:Math.sqrt(ss/Math.max(m,1)),miss:miss});});return {score:tot/Math.max(n,1),per:per};}
 function slider(box,label,min,max,step,val,unit,fn,fmt){const r=document.createElement('div');r.className='row';
  const l=document.createElement('span');l.textContent=label;const s=document.createElement('input');s.type='range';s.min=min;s.max=max;s.step=step;s.value=val;
  const v=document.createElement('span');const show=x=>v.textContent=(fmt?fmt(x):(+x).toFixed(2))+' '+unit;show(val);
  s.oninput=()=>{show(+s.value);fn(+s.value);};r.append(l,s,v);box.appendChild(r);}
-function buildC(){const c=D.candidates[+sel.value];S={dt:c.dt_s,f0:c.curves.map(k=>k.f0_hz)};
+function buildC(){const c=D.candidates[+sel.value];S={dt:c.dt_s,f0:c.curves.map(k=>k?k.f0_hz:null)};
  const box=document.getElementById('csl');box.innerHTML='';
  slider(box,'Δt (shared, all events)',c.dt_lo_s-1,c.dt_hi_s+1,0.01,c.dt_s,'s',x=>{S.dt=x;drawC();});
- c.curves.forEach((k,e)=>slider(box,`f0 event ${e}`,(k.f0_hz*0.97).toFixed(2),(k.f0_hz*1.03).toFixed(2),0.01,k.f0_hz,'Hz',x=>{S.f0[e]=x;drawC();}));
+ c.curves.forEach((k,e)=>{if(k)slider(box,`f0 event ${e}`,(k.f0_hz*0.97).toFixed(2),(k.f0_hz*1.03).toFixed(2),0.01,k.f0_hz,'Hz',x=>{S.f0[e]=x;drawC();});});
  const P=document.getElementById('cpanels');P.innerHTML='';
  D.events.forEach(e=>{const card=document.createElement('div');card.className='card';
   card.innerHTML=`<div id="cp${e.idx}" style="height:420px"></div><div id="ct${e.idx}"></div>`;P.appendChild(card);});
  document.getElementById('cinfo').textContent=`cell ${c.cell_id} · rank ${c.rank} (interim ${c.interim_rank}) · `+
-  `tracks ${c.curves.map(k=>k.icao24+(k.callsign?' '+k.callsign:'')).join(', ')} · feasible Δt [${c.dt_lo_s.toFixed(2)}, ${c.dt_hi_s.toFixed(2)}] s`;
+  `tracks ${c.curves.map(k=>k?k.icao24+(k.callsign?' '+k.callsign:''):'(unmatched)').join(', ')} · feasible Δt [${c.dt_lo_s.toFixed(2)}, ${c.dt_hi_s.toFixed(2)}] s`;
  document.getElementById('opt').textContent=`scorer optimum: ${c.score.toFixed(3)} at Δt ${c.dt_s.toFixed(2)} s`;
- drawC();renderLog('clog',logC.filter(s=>s.cell_id===c.cell_id),['dt',...c.curves.map((_,e)=>'f0_e'+e)]);}
+ drawC();renderLog('clog',logC.filter(s=>s.cell_id===c.cell_id),['dt',...c.curves.map((k,e)=>k?'f0_e'+e:null).filter(Boolean)]);}
 function fmtpm(v,s,d){return s===undefined||!isFinite(s)?v.toFixed(d):`${v.toFixed(d)} ± ${s.toFixed(d)}`;}
 function drawC(){const c=D.candidates[+sel.value],L=liveScore(c),sh=S.dt-c.dt_s,showfit=document.getElementById('showfit').checked,
  others=document.getElementById('showothers').checked;
@@ -371,11 +375,12 @@ function drawC(){const c=D.candidates[+sel.value],L=liveScore(c),sh=S.dt-c.dt_s,
  D.events.forEach(e=>{const cur=c.curves[e.idx],tr=[heat(e),{type:'scattergl',mode:'markers',x:e.ridge.t,y:e.ridge.f,marker:{size:3,color:'#ffe600'},name:'recording ridge'}];
   const tt=e.spec.t;
   if(showfit){const F=e.fit;tr.push({type:'scatter',mode:'lines',x:tt,y:tt.map(t=>straight(t,F.f0_hz,F.v_mps,F.d_m,F.t0_s)),line:{color:'#fff',dash:'dot',width:1.4},name:'recording fit'});}
-  const xs=[],ys=[];tt.forEach(t=>{const r=ratioAt(cur,t+sh);xs.push(t);ys.push(r===null?null:r*S.f0[e.idx]);});
-  tr.push({type:'scatter',mode:'lines',x:xs,y:ys,line:{color:'#e3170a',width:2},name:`candidate #${c.rank} (${cur.icao24})`});
-  if(others){[1,2].forEach(o=>{const oc=D.candidates[(+sel.value)+o];if(!oc)return;const k=oc.curves[e.idx];
+  if(cur){const xs=[],ys=[];tt.forEach(t=>{const r=ratioAt(cur,t+sh);xs.push(t);ys.push(r===null?null:r*S.f0[e.idx]);});
+  tr.push({type:'scatter',mode:'lines',x:xs,y:ys,line:{color:'#e3170a',width:2},name:`candidate #${c.rank} (${cur.icao24})`});}
+  if(others){[1,2].forEach(o=>{const oc=D.candidates[(+sel.value)+o];if(!oc)return;const k=oc.curves[e.idx];if(!k)return;
    tr.push({type:'scatter',mode:'lines',x:tt,y:tt.map(t=>{const r=ratioAt(k,t);return r===null?null:r*k.f0_hz;}),line:{color:'#999',dash:'dash',width:1},name:`#${oc.rank} (${k.icao24})`});});}
   Plotly.react('cp'+e.idx,tr,layout(e));
+  if(!cur){document.getElementById('ct'+e.idx).innerHTML='<b>event left unmatched by this candidate</b> (ranked after candidates that explain every event)';return;}
   const F=e.fit,s=F.sigma,G=cur.geom,f0=S.f0[e.idx],v=G.v_mps,d=G.d_m,fp=f0*C/(C-v),fq=f0*C/(C+v),roc=f0*v*v/(C*d),pe=L.per[e.idx];
   document.getElementById('ct'+e.idx).innerHTML=`<table><tr><th></th><th>recording fit</th><th>candidate (track geometry)</th></tr>
    <tr><td>f0 (Hz)</td><td>${fmtpm(F.f0_hz,s.f0_hz,2)}</td><td>${f0.toFixed(2)} (slider)</td></tr>
@@ -395,8 +400,8 @@ function renderLog(id,rows,keys){const el=document.getElementById(id);if(!rows.l
   return `<td><b>${(n==='MIN'?mn:n==='MAX'?mx:(mn+mx)/2).toFixed(3)}</b></td>`;}).join('')+'<td></td></tr>';});el.innerHTML=h+'</table>';}
 function dl(name,obj){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(obj,null,1)],{type:'application/json'}));a.download=name;a.click();}
 document.getElementById('csnap').onclick=()=>{const c=D.candidates[+sel.value],L=liveScore(c),r={cell_id:c.cell_id,rank:c.rank,dt:S.dt,score:L.score};
- S.f0.forEach((v,e)=>r['f0_e'+e]=v);logC.push(r);buildLogC();};
-function buildLogC(){const c=D.candidates[+sel.value];renderLog('clog',logC.filter(s=>s.cell_id===c.cell_id),['dt',...c.curves.map((_,e)=>'f0_e'+e)]);}
+ S.f0.forEach((v,e)=>{if(v!==null)r['f0_e'+e]=v;});logC.push(r);buildLogC();};
+function buildLogC(){const c=D.candidates[+sel.value];renderLog('clog',logC.filter(s=>s.cell_id===c.cell_id),['dt',...c.curves.map((k,e)=>k?'f0_e'+e:null).filter(Boolean)]);}
 document.getElementById('cclear').onclick=()=>{logC=[];buildLogC();};
 document.getElementById('cdl').onclick=()=>dl(`${D.run_id}_compare_snapshots.json`,logC);
 // ---------- event fit ----------

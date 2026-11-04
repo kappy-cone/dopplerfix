@@ -323,8 +323,8 @@ def characterize_audio(x: NDArray, fs_hz: float, detection: Detection,
             jb = (cp.jet_band_hz[0], min(cp.jet_band_hz[1], sj.f_hz[-1]))
             jet = characterize_window(sj, zj, replace(w, band_hz=jb), jrp, fit_params, c)
             jet = [j for j in jet if not any(
-                abs(j.t_cpa_received_s - q.t_cpa_received_s) < cp.dedupe_dt_s
-                and abs(j.v_mps / q.v_mps - 1) < cp.dedupe_v_frac for q in prop)]
+                (abs(j.t_cpa_received_s - q.t_cpa_received_s) < cp.dedupe_dt_s
+                 and abs(j.v_mps / q.v_mps - 1) < cp.dedupe_v_frac) or is_harmonic_of(j, q, cp) for q in prop)]
         for band_name, fits in (("prop", prop), ("jet", jet)):
             for e in fits:
                 zz, ss = (full_Z, sp) if band_name == "prop" else (zj, sj)
@@ -335,4 +335,55 @@ def characterize_audio(x: NDArray, fs_hz: float, detection: Detection,
                 e.cls = decide(band_name, nh, bb, cp)
                 e.class_features = ClassFeatures(band_name, nh, bb, e.cls)
                 out.append(e)
-    return sorted(out, key=lambda e: e.t_cpa_received_s)
+    out = [e for e in out if e.v_mps >= cp.min_aircraft_speed_mps]
+    return sorted(dedupe_same_aircraft(out, cp), key=lambda e: e.t_cpa_received_s)
+
+
+def is_harmonic_of(j: EventFit, q: EventFit, cp: ClassifyParams) -> bool:
+    """True if j's ridge lies on integer multiples of q's fitted curve at the same received times.
+
+    Robust to j's own fit being poor (a high harmonic of a propeller fitted as a slow, close source).
+    """
+    t, f = j.ridge.t_s, j.ridge.f_hz
+    m = (t >= q.ridge.t_s.min()) & (t <= q.ridge.t_s.max())
+    if m.sum() < 0.5 * len(t) or m.sum() < 10:
+        return False
+    r = f[m] / q.model(t[m])
+    k = np.round(np.median(r))
+    return bool(k >= 2 and np.median(np.abs(r / k - 1)) < cp.dedupe_ratio_tol)
+
+
+def _simple_ratio(r: float, tol: float, max_den: int = 4) -> bool:
+    """r close (relative) to p/q with q ≤ max_den (harmonics, half-orders, 3/2 …)."""
+    for q in range(1, max_den + 1):
+        p_ = round(r * q)
+        if p_ >= 1 and abs(r / (p_ / q) - 1) < tol:
+            return True
+    return False
+
+
+def dedupe_same_aircraft(fits: list[EventFit], cp: ClassifyParams) -> list[EventFit]:
+    """Merge fits that are one aircraft seen on two tone families (fundamental vs half-order or harmonic).
+
+    Same received CPA time (dedupe_dt_s), speed (dedupe_v_frac) and distance (dedupe_d_frac), with f0 at a
+    simple ratio: keep the better-constrained fit (smaller relative σ_v), drop the other.
+    """
+    keep = list(fits)
+    changed = True
+    while changed:
+        changed = False
+        for i in range(len(keep)):
+            for j in range(i + 1, len(keep)):
+                a, b = keep[i], keep[j]
+                if (abs(a.t_cpa_received_s - b.t_cpa_received_s) < cp.dedupe_dt_s
+                        and abs(a.v_mps / b.v_mps - 1) < cp.dedupe_v_frac
+                        and abs(a.d_m / b.d_m - 1) < cp.dedupe_d_frac
+                        and _simple_ratio(max(a.f0_hz, b.f0_hz) / min(a.f0_hz, b.f0_hz), cp.dedupe_ratio_tol)):
+                    ra = a.sigma.get("v_mps", np.inf) / max(a.v_mps, 1e-6)
+                    rb = b.sigma.get("v_mps", np.inf) / max(b.v_mps, 1e-6)
+                    keep.pop(j if ra <= rb else i)
+                    changed = True
+                    break
+            if changed:
+                break
+    return keep

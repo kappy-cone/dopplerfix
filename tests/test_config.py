@@ -4,7 +4,7 @@ import dataclasses
 import pytest
 
 import cli
-from doppler import audio, cascade, classify, detect, fit, ridge, score, synth, tracks
+from doppler import audio, cascade, classify, detect, fit, realism, ridge, score, synth, tracks
 
 CFG = cli.load_config("config.yaml")
 
@@ -20,6 +20,7 @@ SECTIONS = [
     ("synth", synth.SynthParams, {"audible_slant_m", "region_radius_m", "mic_height_m"}),
     ("cascade", cascade.CascadeParams, {"allow_shared_tracks", "max_hypotheses_per_cell"}),  # from score:
     ("score", score.ScoreParams, set()),
+    ("realism", realism.RealismParams, set()),
 ]
 
 
