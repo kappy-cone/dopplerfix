@@ -74,10 +74,11 @@ doppler/
   tracks.py           # ADS-B loading, cleaning, interpolation
   geo.py              # CRS/ENU conversions, DEM sampling, grids, spatial indexing
   cascade.py          # CPA prefilter, offset filter, silence filter, stage counts
-  score.py            # full curve modeling + locked two-event scoring
+  score.py            # full curve modeling + locked N-event scoring
   export.py           # GeoTIFF / GeoPackage / reports
   plot.py             # diagnostics
   synth.py            # synthetic scenarios: tracks + hidden mic + audio
+  realism.py          # realism layer for synthetic scenarios (ADS-B, source, path, scene degradations)
   countermeasures.py  # apply audio processing and rerun the pipeline
 cli.py                # subcommands: events, tracks, locate, synth, clean, countermeasures
 inputs/               # committed: search_regions.gpkg
@@ -147,7 +148,7 @@ For each: whether the true location still ranks 1st, how ridge SNR and fitted pa
 
 ## Known pitfalls
 - **Locked scoring:** per-event characterization fits t0 independently; scoring must not. Don't reuse independent t0s as scoring parameters.
-- **Wind:** Doppler-derived v is relative to the air mass, so it can differ from ADS-B ground speed. Keep the v tolerance generous and configurable. Cascade tolerances are √((n_σ·w_cov·σ)² + sys²): σ from the fit covariance, w_cov widening for edge-clipped passes, sys absolute physical allowances (wind, height, model error). Since d = v·τ, the wind allowance propagates into d. Clock error lives in the Δt prior, not in per-event tolerances. The sys values are provisional until milestone 4.5.
+- **Wind:** with a uniform wind the Doppler ratio is c′/(c′ − v_g·k̂) with c′ = c + w·k̂, so the Doppler-derived v tracks ADS-B *ground* speed (a 10 m/s tailwind at 60 m/s gives ≈59.75 m/s), not airspeed as first assumed. Wind's real effects are a ~w/c (±3%) shape change, travel-time differences (~0.03 s/km per 10 m/s), and refraction affecting audibility. The current wind_sys allowance (15 m/s on v, d·w/v on d) is therefore generous; tightening it is an open decision (HANDOFF). Cascade tolerances are √((n_σ·w_cov·σ)² + sys²): σ from the fit covariance, w_cov widening for edge-clipped passes, sys absolute physical allowances (wind, height, model error). Since d = v·τ, the wind allowance propagates into d. Clock error lives in the Δt prior, not in per-event tolerances. The sys values are provisional until milestone 4.5.
 - **Provisional thresholds:** jet-classification thresholds, audibility slant thresholds and the tolerance sys allowances are provisional until real-data calibration (milestone 4.5). Don't tune them further against synthetic data (the synthetic generator uses the same audibility thresholds to place decoys, so synthetic validation is self-consistent whatever their values).
 - **Clock offset:** absorbed by Δt in scoring; never trust file metadata blindly.
 - **Harmonics:** the ridge can lock onto the wrong harmonic. f0 is free per event, so curve shape matters more than absolute frequency.

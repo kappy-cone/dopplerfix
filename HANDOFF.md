@@ -3,7 +3,90 @@
 Read CLAUDE.md first; it is authoritative for methodology and conventions. This file
 records session state, decisions, and what is fragile.
 
-## Status (session 3, latest)
+## START HERE (end of session 3, commit 1894c68 + this handoff)
+Where things stand: milestone 5 passes on *clean* synthetic data. A skeptic review showed the clean
+synth was far too favourable, so a realism layer was added. With **all** realism on, the true cell
+survives every cascade stage but **ranks 5–39** (errors 100–410 m). Each realism group alone gives
+rank 1–2. The SNR / tolerance / DEM sensitivity sweep the user asked for has **not** been run yet:
+do it after the scoring robustness below, on realistic scenarios.
+
+### Next steps, in order
+1. **Leave-one-group-out ablation** (lost when the session crashed). Script:
+   `/private/tmp/.../scratchpad/scripts/ablate.py` is scratch and may be gone; recreate it. Per
+   scenario (A: 600 s 150,420; C: 60 s 15,45; G: 300 s 50,150,250), run synth with every realism
+   toggle on except one group (adsb, levels, source, path, scene, geometry; also RPM-only, c/wind-only,
+   mic-height-only), then `locate --no-plots`. Record rank, error, and per-event fit errors vs truth
+   (dv, dd, dt against their tolerances). This shows which effects break *scoring* in combination.
+2. Likely scoring fixes (each needs user sign-off, because they touch CLAUDE.md methodology step 8):
+   - **per-event f0 drift** nuisance (f0·(1+β·(t−t_cpa))) for RPM ramps (3–10% in 30% of events);
+     constant f0 per event cannot fit them.
+   - **speed-of-sound search** over environment.temperature_search_c (CLAUDE.md already allows a
+     range); synth now mismatches c by ±3 m/s.
+   - mic height: the pipeline assumes 1.5 m and synth draws 1–10 m; could search it like Δt (cheap).
+3. Then the user's sweep: SNR, tolerance settings (n_sigma, sys values), DEM error (bias/noise via
+   region.ground_elev_m or a perturbed DEM), on realistic scenarios plus `--clean`.
+
+### Open decisions for the user (implemented as defaults, NOT yet approved)
+- `cascade.max_unmatched_events: 1`: an event may stay unmatched (car, bird, aircraft without ADS-B).
+  Ranking is **lexicographic**: hypotheses explaining more events always rank above those explaining
+  fewer; then by score. (A fixed per-point penalty in σ units failed: with small ridge σ even the true
+  fit cost more than "unmatched".) Side effect: many more cascade survivors (single-event loci), and
+  scoring time grows (276 hypotheses, 23 s in test_locate).
+- `cascade.silence_audibility: probabilistic`: P(audible) = Φ(20·log10(thr/r_min)/σ), σ = 6 dB
+  (`silence_level_sigma_db`, PROVISIONAL). Reject a cell only if an unexplained pass has P ≥ 0.99, else
+  add −ln(1−P) nats to the score (`score.silence_weight`). This makes silence much weaker: a decoy at
+  0.8× threshold adds about 1 nat. That is physically honest given ±6 dB level scatter, but it changes
+  CLAUDE.md step 6 ("reject"). `hard` keeps the milestone-4 behaviour (decoy tests use it).
+- `cascade.gof_widening: true`: σ × max(1, fit rms / ridge noise), the reduced-χ² scaling (covariance-
+  derived, inside the approved tolerance form).
+- **Wind tolerance:** the physics in CLAUDE.md was wrong (Doppler v ≈ ground speed, now corrected in
+  Known pitfalls). The 15 m/s wind_sys and the d·w/v term are far larger than needed (≈ v·w/c ≈ 2 m/s).
+  Tightening is the user's call; left unchanged.
+- Ambiguity measure (user said "up to you"): tied set = score ≤ best·(1+0.15) among hypotheses
+  with the same number of unmatched events; "unique" if within 400 m of rank 1. Validation counts
+  "correct" only if rank 1 *and* unique. Thresholds PROVISIONAL.
+
+### Realism layer (doppler/realism.py; config.yaml `realism:`; `synth --clean` = all off)
+From the skeptic review (ranked findings, every one implemented as a toggle):
+- ADS-B: 1 s ±0.3 s fixes, per-track timestamp bias U(±0.6 s), σ 7 m (3% MLAT 100 m), 25 ft altitude
+  steps, 30% of props baro-only with N(0, 60 m) offset, 1 kt / 64 fpm steps, Poisson gaps 5–60 s,
+  optional dropped aircraft (events protected).
+- Source: shared level N(class mean, 6 dB) for all aircraft (events resampled to ≥ 0 dB band SNR at CPA),
+  10 harmonics at −3 dB/order ±6 dB plus a −12 dB half-order comb, RPM walk 0.3% + ramps 3–10% (30%),
+  twin-engine detune (30% of props), directivity ±6 dB (jets: fan tone fades aft).
+- Path: ISO 9613-1 absorption per harmonic (verified against the standard's table), ground-reflection
+  image source R 0.8–1.0, uniform wind ≤ 10 m/s, c mismatch ±3 m/s.
+- Scene: wind gusts, 60 Hz hum comb, car passes (Doppler), bird chirps 2–6 kHz, 100 Hz high-pass, AGC.
+- Geometry: 50% corridor-aligned events, climbs ±3–5 m/s (40% props), speed ramps, turns ≤ 3°/s,
+  clock offset ±5 s, mic height 1–10 m, 4 aircraft in the 0.5–1.5× threshold band, offsets 0–1500 m,
+  prop speeds 35–90 m/s.
+- Truth JSON records c_true, wind, clock error, true mic height, ADS-B degradation per aircraft, and
+  each aircraft's level / closest in-clip slant / peak band SNR.
+- Clean scenarios are bit-identical to before (checked by hash). Synthesis of a 600 s realistic clip
+  takes ~40 s (hot spot: per-harmonic complex recursion over 2 paths × twins).
+
+### Ablation results (each group alone; pre-leave-one-out). rank / rank-1 error
+| group | A (600 s) | C (60 s) | G (3 events) |
+|---|---|---|---|
+| clean (wider offsets/speeds) | 1 / 37 m | 1 / 3 m | 1 / 8 m |
+| adsb | 1 / 48 | 1 / 33 | 1 / 77 |
+| levels | 1 / 34 | 1 / 11 | 2 / 46 |
+| source | 2 / 95 | 1 / 4 | 1 / 14 |
+| path | 2 / 66 | 2 / 165 | 1 / 17 |
+| scene | 1 / 26 | 1 / 3 | 1 / 9 |
+| geometry | 1 / 60 | 1 / 8 | 1 / 21 |
+| **all** | **39 / 410** | **5 / 261** | **32 / 100** |
+Before the robustness fixes, source / path / levels / all mostly had **zero** CPA survivors (spurious
+or duplicate events vetoed every cell) or a silence-rejected true cell.
+
+### Pipeline changes this round (tests in test_realism, test_fit, test_cascade, test_score)
+- fit: `dedupe_same_aircraft` (same t_rx, v, d; f0 at a simple ratio) and `is_harmonic_of` (jet-band ridge
+  on integer multiples of a prop event's fitted curve); `classify.min_aircraft_speed_mps` 25 (PROVISIONAL).
+- tracks: OpenSky `lastposupdate` used as the position time (needed for milestone 7).
+- Tests: 104 fast pass; slow `test_locate` / `test_cli_export` pinned to `synth --clean` and pass; the
+  rest of the slow suite was not rerun after this round.
+
+## Status (milestone 5)
 - **Milestone 5 done** (commit e181f21): locked N-event scoring with in-cell refinement; the synthetic
   true cell ranks 1st in every multi-event scenario (table below). Read-only comparison viewer built.
 - Automation first (CLAUDE.md Operating modes): human-in-the-loop work is deferred to milestone 9.
