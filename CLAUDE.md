@@ -81,7 +81,9 @@ config.yaml           # search region, time prior, grid spacing, tolerances, ban
 ## Conventions
 - Python 3.11+: numpy, scipy, pandas, matplotlib, soundfile, pymap3d, pyproj, rasterio, geopandas, pyyaml. Tests with pytest. Use a venv and pin requirements.txt.
 - Internal time is float seconds since Unix epoch (UTC). Convert only at I/O boundaries.
-- Do geometry in a local metric CRS (UTM zone or ENU about the region center; for US-wide, per-tile local frames). Store and export in EPSG:4326.
+- Do distance and Doppler geometry in ECEF (EPSG:4978, metres): exact 3D slant ranges anywhere, no tile seams. The candidate grid is indexed in a projected CRS (UTM for regional, EPSG:5070 for US-wide); local ENU is only for plotting and synthetic scenario construction. Store and export in EPSG:4326.
+- Heights: ADS-B geometric altitude is height above the WGS84 ellipsoid; DEMs are usually orthometric, so add the geoid undulation (config) before comparing them.
+- Clip length varies from under a minute to hours: never assume quiet background frames exist, and window any per-clip arrays (TrackSet, spectrograms) so memory scales with the time span actually needed.
 - SI units everywhere; put units in variable names when ambiguous (alt_m, speed_mps).
 - Pure functions in doppler/*. Keep file I/O in cli.py, export.py, and plot.py.
 - Type hints and short docstrings on public functions. Every module gets tests.

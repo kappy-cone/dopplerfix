@@ -1,85 +1,202 @@
-# Sample configuration for acoustic Doppler geolocation.
+# Configuration for acoustic Doppler geolocation.
 # All units SI. Times in config are ISO-8601 UTC strings; internally they become
-# float seconds since the Unix epoch.
+# float seconds since the Unix epoch. Every tolerance and threshold lives here
+# (tests/test_config.py checks each parameter dataclass field has a key).
+
+search:
+  mode: regional             # regional | us (US-wide, milestone 7)
 
 region:
-  center_lat: 40.0394        # search-region centre (also the ENU origin)
+  center_lat: 40.0394        # search-region centre (ENU origin for synthetic scenarios and plots)
   center_lon: -105.2258
-  radius_m: 6000             # search radius around the centre
-  ground_elev_m: 1600.0      # flat-DEM stub elevation until a real DEM is wired in
-  dem_path: null             # e.g. data/dem.tif (milestone 3)
+  radius_m: 6000
+  ground_elev_m: 1600.0      # flat-DEM fallback (ellipsoidal) when dem.path is null
+
+dem:
+  path: null                 # e.g. data/dem.tif (any CRS; read in windows by cli.py)
+  geoid_undulation_m: 0.0    # added to DEM heights: orthometric -> ellipsoidal (≈ -17 m near Boulder, EGM96)
 
 time_prior:
-  # mode: known | window | relative
-  mode: known
-  start_utc: "2026-06-15T14:00:00Z"   # used when mode == known
-  window_utc: null                    # [earliest, latest] start when mode == window
+  mode: known                # known | window | relative
+  start_utc: "2026-06-15T14:00:00Z"
+  window_utc: null           # [earliest, latest] start when mode == window
 
 environment:
   temperature_c: 20.0        # c = 331.3 + 0.606*T  (20 C -> 343.4 m/s)
-  temperature_search_c: null # e.g. [5, 30] to search c
+  temperature_search_c: null
 
 mic:
   height_agl_m: 1.5
 
+# Main spectrogram: prop tones (1 Hz bins). Resampled to analysis_fs_hz first.
 spectrogram:
-  analysis_fs_hz: 2000       # audio is resampled to this before the STFT
+  analysis_fs_hz: 8000
   window_s: 1.0
   overlap: 0.9
-  fmax_hz: 1000.0
+  fmax_hz: 3900.0
+
+# Short-window spectrogram for fast-sweeping jet fan tones (4 Hz bins).
+spectrogram_jet:
+  analysis_fs_hz: 8000
+  window_s: 0.25
+  overlap: 0.75
+  fmax_hz: 3900.0
 
 detect:
   band_hz: [40, 900]
+  bands_hz: [[40, 900]]      # tonal bands on the main spectrogram
+  jet_bands_hz: [[900, 3800]]  # tonal bands on the jet spectrogram
+  floor_mode: freq           # freq (any clip length) | time (long clips only)
+  floor_halfwidth_hz: 20.0
   smooth_s: 3.0
-  trigger_db: 10.0           # tonal excess above the recording's baseline to declare an event
-  extend_db: 4.0             # hysteresis: extend the window while excess > baseline + this
+  trigger_db: 10.0           # above baseline (min of clip percentile and noise theory)
+  extend_db: 4.0
   baseline_percentile: 20.0
+  baseline_theory_slack_db: 1.0
   min_duration_s: 20.0
   pad_s: 5.0
-  split_dip_db: 6.0          # split merged windows at dips this deep
+  split_dip_db: 6.0
+  chunk_s: 120.0             # audio processed in chunks: memory independent of clip length
+  broadband_trigger: true
   manual_windows: []         # e.g. [{start_s: 100, end_s: 220, band_hz: [80, 260]}]
 
-ridge:
-  max_up_hz_per_s: 4.0       # Doppler curves descend; allow small upward wobble
+ridge:                       # prop band, main spectrogram
+  max_up_hz_per_s: 4.0
   max_down_hz_per_s: 60.0
   jump_penalty_db_per_hz: 0.5
-  weak_db: 12.0              # reject ridge columns weaker than this above the per-bin median
+  weak_db: 12.0
   outlier_hz: 3.0
+  min_points: 50
+  min_ridge_s: 5.0           # strong ridge points must span at least this long
+  harmonic_db: 8.0           # sub-harmonic presence threshold (ridge locked onto a harmonic?)
+  max_ridges: 4              # flyovers peeled per window
+  mask_halfwidth_hz: 4.0
+  guide_hz: 3.0
+  guided_passes: 2
+  floor_mode: freq
+  floor_halfwidth_hz: 20.0
+  seed_mode: hough           # hough (Doppler matched filter; robust to crossing ridges) | dp
+  hough_dlogf: 0.008
+  hough_dt_s: 0.5
+  hough_cap_db: 25.0
+  hough_harmonics: 3
+  hough_dilate_bins: 3
+  hough_v_range_mps: [35, 260]
+  hough_v_step: 0.12
+  hough_tau_range_s: [2, 80]
+  hough_tau_step: 0.3
+  hough_t0_margin_s: 20.0
+  hough_nms_s: 4.0
+
+ridge_jet:                   # jet band, jet spectrogram (keys not given fall back to ridge:)
+  max_up_hz_per_s: 15.0
+  max_down_hz_per_s: 250.0
+  weak_db: 10.0
+  outlier_hz: 8.0
+  min_ridge_s: 10.0
+  guide_hz: 8.0
+  mask_halfwidth_hz: 10.0
+  hough_harmonics: 1
 
 fit:
   v_bounds_mps: [10, 320]
   d_bounds_m: [20, 30000]
+  t0_margin_s: 60.0
   corr_inflation: null       # null -> from residual autocorrelation (>= sqrt(window/hop))
   outlier_sigma: 4.0
-  f0_drift_prior_per_s: 1.0e-4   # 1-sigma source-tone drift rate prior (RPM wander)
+  min_descent_frac: 0.02
+  f0_drift_prior_per_s: 1.0e-4
+
+classify:
+  prop_band_hz: [40, 900]
+  jet_band_hz: [900, 3800]
+  broadband_band_hz: [150, 3500]
+  broadband_percentile: 20.0
+  harmonic_weak_db: 8.0
+  max_harmonic: 5
+  prop_min_harmonics: 1
+  jet_min_broadband_rise_db: 12.0
+  dedupe_dt_s: 3.0
+  dedupe_v_frac: 0.15
 
 tracks:
   source: csv                # csv | parquet | opensky (milestone 7)
   path: data/tracks.csv
+  columns: {}                # extra column-name mappings onto the canonical schema
   resample_s: 0.25
+  max_gap_s: 20.0
+  max_speed_mps: 350.0
+  outlier_m: 300.0
+  alt_outlier_m: 150.0
+  min_points: 5
+  min_geometric_frac: 0.5
+  velocity_source: adsb      # adsb | derivative
+
+aircraft_types:
+  registry_path: data/aircraft_db.csv   # OpenSky-style: icao24, typecode[, icaoaircrafttype]
+  type_table_path: null                 # optional ICAO Doc 8643 table: typecode, description
 
 grid:
   spacing_m: 200
-  top_n: 5
+  crs: auto                  # auto -> UTM zone (regional) or EPSG:5070 (us)
 
-score:
-  v_tolerance_frac: 0.25     # generous: wind biases Doppler v away from ground speed
-  unmatched_event_penalty: 10.0   # capped log-likelihood penalty for no matching track
-  negative_evidence_weight: 0.0
+cascade:                     # milestone 4
+  v_tol_frac: 0.25           # generous: wind biases Doppler v away from ground speed
+  d_tol_frac: 0.25
+  sigma_k: 3.0               # tolerance = max(sigma_k * fit sigma, the floors above)
+  cpa_time_tol_s: 10.0       # known-time mode: clock error allowance for the CPA time
+  offset_tol_s: 3.0
+  truncated_coverage: 2.0    # coverage (in d/v) below this on a side -> widen v/d tolerances
+  truncated_tol_mult: 2.0
+  baro_alt_tol_m: 150.0      # extra height tolerance for barometric-altitude tracks
+  audible_slant_m: {prop: 3000.0, jet: 6000.0, unknown: 6000.0}
+  silence_mode: reject       # reject | count
+  silence_max_unexplained: 0
+  explain_time_tol_s: 20.0
+
+score:                       # milestone 5
+  dt_halfwidth_s: 10.0       # Δt search range in known-time mode
+  dt_coarse_step_s: 0.5
+  ridge_decimate_s: 0.5
+  top_n: 10
 
 synth:
   seed: 0
   duration_s: 600
   fs_hz: 8000
-  n_tracks: 3
-  snr_db: 10.0               # tone power at CPA vs noise power in noise_band_hz
+  n_tracks: 3                # legacy layout, used only when event_rx_times_s is null
+  event_rx_times_s: [150, 420]   # received CPA times of the events (any count, any clip length)
+  event_classes: [prop, prop]
+  snr_db: 10.0               # event tone power at its CPA vs noise power in noise_band_hz
   noise_band_hz: [40, 1000]
   harmonic_amps: [1.0, 0.5, 0.3]
   f0_range_hz: [80, 180]
   speed_range_mps: [55, 90]
   alt_agl_range_m: [300, 900]
   offset_range_m: [150, 1200]
+  jet_f0_range_hz: [900, 2200]
+  jet_harmonic_amps: [1.0, 0.3]
+  jet_speed_range_mps: [75, 130]
+  jet_alt_agl_range_m: [400, 1500]
+  jet_broadband_band_hz: [150, 3500]
+  jet_broadband_to_tone_db: 5.0
   excess_atten_db_per_km: 3.0
   f0_jitter_frac: 0.002
   broadband_to_tone_db: 0.0
-  curved_fraction: 0.34      # share of tracks given a gentle turn
+  curved_fraction: 0.34
+  ref_distance_m: 1000.0
+  prop_snr_at_ref_db: -5.0   # non-event source levels: low enough that decoys at 1.2x threshold are inaudible
+  jet_snr_at_ref_db: 12.0
+  event_max_slant_frac: 0.6
+  n_decoys_per_event: 2
+  n_twins_per_event: 2
+  n_background: 10
+  decoy_target_slant_frac: 0.8
+  inaudible_margin: 1.2
+  skip_audio_beyond_m: 8000.0
+  unknown_type_frac: 0.1
+  track_dt_s: 0.25
+  track_pad_before_s: 180.0
+  track_pad_after_s: 60.0
+  mic_max_offset_m: 3000.0
+  # audible_slant_m and region_radius_m come from cascade: and region:

@@ -55,10 +55,12 @@ def test_scenario_is_deterministic_and_tracks_roundtrip(scenario0):
     again = make(0)
     np.testing.assert_array_equal(again.audio, scenario0.audio)
     df = tracks_to_frame(scenario0.tracks, FRAME)
-    back = tracks_from_frame(df)
-    assert [t.icao24 for t in back] == [t.icao24 for t in scenario0.tracks]
-    np.testing.assert_allclose(back[0].enu(FRAME), scenario0.track_enu[0], atol=1e-3)
-    np.testing.assert_allclose(back[0].t_s, scenario0.tracks[0].t_s, atol=1e-6)
+    back = {t.icao24: t for t in tracks_from_frame(df)}
+    assert set(back) == {t.icao24 for t in scenario0.tracks}
+    b0 = back[scenario0.tracks[0].icao24]
+    np.testing.assert_allclose(b0.enu(FRAME), scenario0.track_enu[0], atol=1e-3)
+    np.testing.assert_allclose(b0.t_s, scenario0.tracks[0].t_s, atol=1e-6)
+    np.testing.assert_allclose(b0.vel_enu, scenario0.tracks[0].vel_enu, atol=1e-3)
 
 
 def test_snr_definition():

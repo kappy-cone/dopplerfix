@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
 from scipy import signal
+from scipy.ndimage import median_filter
 
 TIME_MODES = ("known", "window", "relative")
 
@@ -109,9 +110,20 @@ def resample(x: NDArray, fs_in: float, fs_out: float) -> NDArray:
     return signal.resample_poly(x, fr.numerator, fr.denominator)
 
 
-def compute_spectrogram(x: NDArray, fs_hz: float, params: SpectrogramParams = SpectrogramParams()) -> Spectrogram:
-    """Hann-window PSD spectrogram (scipy.signal.spectrogram), cropped to fmax, in dB."""
+def compute_spectrogram(x: NDArray, fs_hz: float, params: SpectrogramParams = SpectrogramParams(),
+                        t_range_s: tuple[float, float] | None = None) -> Spectrogram:
+    """Hann-window PSD spectrogram (scipy.signal.spectrogram), cropped to fmax, in dB.
+
+    ``t_range_s`` restricts the computation to a recording-relative span (frame
+    times stay recording-relative), so long clips can be processed window by
+    window with memory proportional to the span.
+    """
     x = mix_to_mono(x)
+    t_off = 0.0
+    if t_range_s is not None:
+        i0 = max(0, int(np.floor(t_range_s[0] * fs_hz)))
+        i1 = min(len(x), int(np.ceil(t_range_s[1] * fs_hz)))
+        x, t_off = x[i0:i1], i0 / fs_hz
     fs = float(min(params.analysis_fs_hz, fs_hz))
     x = resample(x, fs_hz, fs)
     nper = int(round(params.window_s * fs))
@@ -121,4 +133,46 @@ def compute_spectrogram(x: NDArray, fs_hz: float, params: SpectrogramParams = Sp
     keep = f <= params.fmax_hz
     S = S[keep].astype(np.float32)
     db = 10 * np.log10(S + np.finfo(np.float32).tiny)
-    return Spectrogram(t_s=t, f_hz=f[keep], power_db=db, window_s=nper / fs, hop_s=(nper - nover) / fs)
+    return Spectrogram(t_s=t + t_off, f_hz=f[keep], power_db=db, window_s=nper / fs, hop_s=(nper - nover) / fs)
+
+
+FLOOR_MODES = ("freq", "time")
+
+
+def background_db(spec: Spectrogram, mode: str = "freq", halfwidth_hz: float = 20.0) -> NDArray:
+    """Background level to measure tonal excess against.
+
+    freq: per frame, a running median across ±halfwidth_hz. Needs no quiet
+          frames, so it works for any clip length, and broadband aircraft noise
+          cancels (only tonality remains). Returns (F, T).
+    time: per bin, the median over the clip. Needs the tone to occupy a minority
+          of frames (long clips). Returns (F, 1).
+    """
+    if mode == "time":
+        return np.median(spec.power_db, axis=1, keepdims=True)
+    if mode != "freq":
+        raise ValueError(f"floor mode must be one of {FLOOR_MODES}")
+    k = max(3, int(round(2 * halfwidth_hz / spec.df_hz)) | 1)
+    return running_median_freq(spec.power_db, k)
+
+
+def running_median_freq(P: NDArray, k: int, step: int | None = None) -> NDArray:
+    """Running median along axis 0 with window k, evaluated every ``step`` bins and
+    linearly interpolated (≈10x faster than a full median filter, same result for
+    a background that varies slowly across frequency)."""
+    F = P.shape[0]
+    step = step or max(1, k // 4)
+    half = k // 2
+    Pp = np.pad(P, ((half, half), (0, 0)), mode="edge")
+    centres = np.arange(0, F, step)
+    if centres[-1] != F - 1:
+        centres = np.r_[centres, F - 1]
+    win = np.lib.stride_tricks.sliding_window_view(Pp, k, axis=0)[centres]  # (C, T, k)
+    med = np.median(win, axis=-1)
+    if step == 1:
+        return med
+    idx = np.arange(F)
+    j = np.searchsorted(centres, idx, side="right") - 1
+    j = np.clip(j, 0, len(centres) - 2)
+    w = ((idx - centres[j]) / (centres[j + 1] - centres[j]))[:, None]
+    return ((1 - w) * med[j] + w * med[j + 1]).astype(P.dtype)
