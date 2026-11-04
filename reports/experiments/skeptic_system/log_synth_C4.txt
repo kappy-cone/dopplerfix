@@ -1,0 +1,19 @@
+cascade decoys: 3 of 3 placed over CPA/offset survivors (13 survivors, feasible need ≥ 1200 m from mic)
+hidden mic: 40.037530, -105.259840  (ENU -2906 E, -207 N)
+c = 343.4 m/s, 2 flyovers, SNR 10 dB, clip 60 s
+  truth EVT001 94b610 (prop): rx CPA   15.00s  v  82.9  d    869  f0  134.4  turn +0.00°/s
+  truth EVT002 c9f869 (prop): rx CPA   45.00s  v  89.1  d   1101  f0  176.9  turn -2.41°/s
+tracks by role: {'background': 10, 'decoy': 5, 'twin': 4, 'near': 4, 'event': 2}  (2 non-event placements infeasible)
+fitted events:
+ #  t_cpa_rx   f0 Hz        v m/s          d m           t0 s   rms class  cover
+ 0     16.48   257.7   96.1±1.5     1227±52       12.91±0.18   0.55 prop    1.2/3.0
+ 1     42.96   167.5   40.6±3.8     1645±303      38.17±0.70   0.19 prop    0.8/0.4
+ 2     45.40  1264.3   65.8±0.9      913±20       42.74±0.03   0.54 unknown 3.2/1.0
+ 3     45.41  1083.5   63.9±1.1      845±31       42.95±0.08   1.01 unknown 3.2/1.1
+  wrote audio    /private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system/scn/C4/audio.flac
+  wrote sidecar  /private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system/scn/C4/audio.json
+  wrote tracks   /private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system/scn/C4/tracks.parquet
+  wrote truth    /private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system/scn/C4/truth.json
+  wrote gpkg     /private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system/scn/C4/truth.gpkg
+  wrote registry /private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system/scn/C4/aircraft_db.csv
+  wrote plot     /private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system/scn/C4/diagnostic.png

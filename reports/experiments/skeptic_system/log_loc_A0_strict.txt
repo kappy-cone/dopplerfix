@@ -1,0 +1,9 @@
+run A0_strict: region synth_boulder, 4 events, 76 track segments, grid EPSG:32613
+  event 0 (prop): t_rx 149.43s v 70.7±15.7 d 931±406 t±3.65s (w_cov 1)
+  event 1 (prop): t_rx 419.97s v 80.8±15.0 d 801±295 t±3.17s (w_cov 1)
+  event 2 (prop): t_rx 425.60s v 26.9±15.5 d 138±247 t±6.94s (w_cov 1)
+  event 3 (prop): t_rx 448.54s v 215.7±3141.1 d 7441±186746 t±726.13s (w_cov 2)
+  survivors: grid 2,821 -> cpa 0 -> offset 0 -> silence 0  (silence removed 0)
+  true cell: reached grid; rank None of 0 (interim None); rank-1 error None m; assignment correct: False
+  ranking: none (0 tied within 15%, spread None m, rank-2/rank-1 None)
+  time 178.3s (events 20.2, cascade 157.11, score 0.01 for 0 hypotheses); disk 0.58 MB -> /private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system/runs/A0_strict

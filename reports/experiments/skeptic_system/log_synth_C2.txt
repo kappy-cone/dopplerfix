@@ -1,0 +1,21 @@
+cascade decoys: 3 of 3 placed over CPA/offset survivors (406 survivors, feasible need ≥ 1200 m from mic)
+hidden mic: 40.052579, -105.231193  (ENU -460 E, 1464 N)
+c = 343.4 m/s, 2 flyovers, SNR 10 dB, clip 60 s
+  truth EVT001 e1569e (prop): rx CPA   15.00s  v  50.1  d   1275  f0  145.7  turn -1.88°/s
+  truth EVT002 3840a7 (prop): rx CPA   45.00s  v  88.2  d   1148  f0  148.3  turn +0.00°/s
+tracks by role: {'background': 10, 'twin': 4, 'decoy': 4, 'near': 4, 'event': 2}  (3 non-event placements infeasible)
+fitted events:
+ #  t_cpa_rx   f0 Hz        v m/s          d m           t0 s   rms class  cover
+ 0      9.39    88.7   25.6±0.6       51±3         9.24±0.04   0.10 unknown 2.1/2.3
+ 1     15.09   145.1   62.0±1.2     1110±36       11.86±0.08   0.09 prop    0.8/1.0
+ 2     28.79   107.3   60.5±15.5    2585±1357     21.26±2.33   0.19 prop    0.7/0.1
+ 3     32.95   105.5   64.0±19.4    3026±1741     24.14±9.10   0.14 prop    0.2/0.6
+ 4     40.30   168.3   55.5±62.5     713±879      38.23±9.23   0.53 unknown 3.1/-0.5
+ 5     45.04   149.2   89.0±1.6     1165±51       41.65±0.11   0.52 prop    1.6/1.1
+  wrote audio    /private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system/scn/C2/audio.flac
+  wrote sidecar  /private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system/scn/C2/audio.json
+  wrote tracks   /private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system/scn/C2/tracks.parquet
+  wrote truth    /private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system/scn/C2/truth.json
+  wrote gpkg     /private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system/scn/C2/truth.gpkg
+  wrote registry /private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system/scn/C2/aircraft_db.csv
+  wrote plot     /private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system/scn/C2/diagnostic.png

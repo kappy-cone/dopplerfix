@@ -1,0 +1,12 @@
+/Users/williambarr/qgis/doppler/tracks.py:297: RuntimeWarning: invalid value encountered in cast
+  i0 = np.floor(u).astype(np.int64)
+run C1_robust: region synth_boulder, 2 events, 37 track segments, grid EPSG:32613
+  event 0 (prop): t_rx 14.82s v 70.6±30.6 d 921±1034 t±6.62s (w_cov 4)
+  event 1 (prop): t_rx 43.52s v 45.5±22.5 d 478±568 t±7.65s (w_cov 2)
+  survivors: grid 2,821 -> cpa 1,325 -> offset 1,325 -> silence 1,172  (silence removed 153)
+  true cell: reached silence; rank 313 of 1172 (interim 181); rank-1 error 4885 m; assignment correct: False
+  ranking: unique (4 tied within 15%, spread 25 m, rank-2/rank-1 1.02)
+  #1 40.06667,-105.23945 score 1.336 Δt -5.83s tracks ['630816', 'e42331'] rms [0.63, 0.3] Hz silence 0.0 nats
+  #2 40.06681,-105.23952 score 1.361 Δt -6.03s tracks ['630816', 'e42331'] rms [0.71, 0.28] Hz silence 0.0 nats
+  #3 40.06662,-105.23922 score 1.394 Δt -5.78s tracks ['630816', 'e42331'] rms [0.58, 0.32] Hz silence 0.0 nats
+  time 73.5s (events 3.5, cascade 0.50, score 68.92 for 2115 hypotheses); disk 1.73 MB -> /private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system/runs/C1_robust

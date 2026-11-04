@@ -1,0 +1,14 @@
+/Users/williambarr/qgis/doppler/tracks.py:297: RuntimeWarning: invalid value encountered in cast
+  i0 = np.floor(u).astype(np.int64)
+run C4_robust: region synth_boulder, 4 events, 31 track segments, grid EPSG:32613
+  event 0 (prop): t_rx 16.48s v 96.1±17.6 d 1227±508 t±3.18s (w_cov 2)
+  event 1 (prop): t_rx 42.96s v 40.6±48.2 d 1645±3824 t±17.97s (w_cov 4)
+  event 2 (unknown): t_rx 45.40s v 65.8±15.9 d 913±383 t±3.60s (w_cov 2)
+  event 3 (unknown): t_rx 45.41s v 63.9±16.4 d 845±415 t±3.81s (w_cov 2)
+  survivors: grid 2,821 -> cpa 169 -> offset 45 -> silence 11  (silence removed 34)
+  true cell: reached grid; rank None of 11 (interim None); rank-1 error 4759 m; assignment correct: False
+  ranking: unique (2 tied within 15%, spread 51 m, rank-2/rank-1 1.13)
+  #1 39.99469,-105.25830 score 16.703 Δt -8.86s tracks ['—', 'dfc8a0', '87e59f', 'eb8bbc'] rms [nan, 1.08, 2.67, 10.28] Hz silence 7.8 nats
+  #2 39.99470,-105.25771 score 18.903 Δt -9.20s tracks ['—', 'dfc8a0', '87e59f', 'eb8bbc'] rms [nan, 1.32, 3.42, 10.73] Hz silence 8.1 nats
+  #3 40.01108,-105.24606 score 39.963 Δt +8.10s tracks ['b05aab', 'b49652', '—', 'eb8bbc'] rms [13.41, 5.87, nan, 4.24] Hz silence 7.4 nats
+  time 11.8s (events 5.0, cascade 3.75, score 2.69 for 35 hypotheses); disk 0.65 MB -> /private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system/runs/C4_robust

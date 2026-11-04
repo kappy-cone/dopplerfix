@@ -1,0 +1,60 @@
+K= 30 seed=0 label=strict offset=41 silence=41 far_full=0 bg_full=0 true_survives=True max_pass_per_cell_event=1 cap_hits=0 rank1_tracks=ev0/ev1 true_rank=1 n_ranked=41 rank1_err_m=66 rank1_nunmatched=0 true_nunmatched=0 amb=unique
+K= 30 seed=0 label=robust offset=630 silence=603 far_full=0 bg_full=0 true_survives=True max_pass_per_cell_event=2 cap_hits=0 rank1_tracks=ev0/ev1 true_rank=1 n_ranked=603 rank1_err_m=66 rank1_nunmatched=0 true_nunmatched=0 amb=unique
+K= 30 seed=0 label=strict/noadsb2 offset=0 silence=0 far_full=0 bg_full=0 true_survives=False max_pass_per_cell_event=0 cap_hits=0
+K= 30 seed=0 label=robust/noadsb2 offset=592 silence=573 far_full=0 bg_full=0 true_survives=True max_pass_per_cell_event=2 cap_hits=0 rank1_tracks=ev0/- true_rank=13 n_ranked=573 rank1_err_m=461 rank1_nunmatched=1 true_nunmatched=1 amb=ambiguous
+   (13s)
+K= 30 seed=1 label=strict offset=28 silence=23 far_full=13 bg_full=13 true_survives=True max_pass_per_cell_event=1 cap_hits=0 rank1_tracks=ev0/ev1 true_rank=1 n_ranked=23 rank1_err_m=66 rank1_nunmatched=0 true_nunmatched=0 amb=unique
+K= 30 seed=1 label=robust offset=727 silence=699 far_full=18 bg_full=18 true_survives=True max_pass_per_cell_event=1 cap_hits=0 rank1_tracks=ev0/ev1 true_rank=1 n_ranked=699 rank1_err_m=66 rank1_nunmatched=0 true_nunmatched=0 amb=unique
+K= 30 seed=1 label=strict/noadsb2 offset=18 silence=13 far_full=13 bg_full=13 true_survives=False max_pass_per_cell_event=1 cap_hits=0
+K= 30 seed=1 label=robust/noadsb2 offset=689 silence=689 far_full=18 bg_full=18 true_survives=True max_pass_per_cell_event=1 cap_hits=0 rank1_tracks=bg027/bg002 true_rank=28 n_ranked=689 rank1_err_m=5520 rank1_nunmatched=0 true_nunmatched=1 amb=ambiguous
+   (14s)
+K= 30 seed=2 label=strict offset=16 silence=16 far_full=0 bg_full=0 true_survives=True max_pass_per_cell_event=1 cap_hits=0 rank1_tracks=ev0/ev1 true_rank=1 n_ranked=16 rank1_err_m=66 rank1_nunmatched=0 true_nunmatched=0 amb=unique
+K= 30 seed=2 label=robust offset=333 silence=325 far_full=0 bg_full=0 true_survives=True max_pass_per_cell_event=1 cap_hits=0 rank1_tracks=ev0/ev1 true_rank=1 n_ranked=325 rank1_err_m=66 rank1_nunmatched=0 true_nunmatched=0 amb=unique
+K= 30 seed=2 label=strict/noadsb2 offset=0 silence=0 far_full=0 bg_full=0 true_survives=False max_pass_per_cell_event=0 cap_hits=0
+K= 30 seed=2 label=robust/noadsb2 offset=247 silence=247 far_full=0 bg_full=0 true_survives=True max_pass_per_cell_event=1 cap_hits=0 rank1_tracks=ev0/- true_rank=9 n_ranked=247 rank1_err_m=724 rank1_nunmatched=1 true_nunmatched=1 amb=ambiguous
+   (5s)
+K= 60 seed=0 label=strict offset=14 silence=14 far_full=0 bg_full=0 true_survives=True max_pass_per_cell_event=1 cap_hits=0 rank1_tracks=ev0/ev1 true_rank=2 n_ranked=14 rank1_err_m=172 rank1_nunmatched=0 true_nunmatched=0 amb=unique
+K= 60 seed=0 label=robust offset=922 silence=807 far_full=0 bg_full=0 true_survives=True max_pass_per_cell_event=2 cap_hits=0 rank1_tracks=ev0/ev1 true_rank=2 n_ranked=807 rank1_err_m=172 rank1_nunmatched=0 true_nunmatched=0 amb=unique
+K= 60 seed=0 label=strict/noadsb2 offset=0 silence=0 far_full=0 bg_full=0 true_survives=False max_pass_per_cell_event=0 cap_hits=0
+K= 60 seed=0 label=robust/noadsb2 offset=836 silence=777 far_full=0 bg_full=0 true_survives=True max_pass_per_cell_event=2 cap_hits=0 rank1_tracks=ev0/- true_rank=4 n_ranked=777 rank1_err_m=257 rank1_nunmatched=1 true_nunmatched=1 amb=ambiguous
+   (15s)
+K= 60 seed=1 label=strict offset=147 silence=22 far_full=0 bg_full=0 true_survives=True max_pass_per_cell_event=3 cap_hits=0 rank1_tracks=ev0/ev1 true_rank=1 n_ranked=22 rank1_err_m=66 rank1_nunmatched=0 true_nunmatched=0 amb=unique
+K= 60 seed=1 label=robust offset=2770 silence=2469 far_full=115 bg_full=112 true_survives=True max_pass_per_cell_event=3 cap_hits=0 rank1_tracks=ev0/ev1 true_rank=1 n_ranked=2469 rank1_err_m=66 rank1_nunmatched=0 true_nunmatched=0 amb=unique
+K= 60 seed=1 label=strict/noadsb2 offset=122 silence=0 far_full=0 bg_full=0 true_survives=False max_pass_per_cell_event=3 cap_hits=0
+K= 60 seed=1 label=robust/noadsb2 offset=2660 silence=2359 far_full=112 bg_full=112 true_survives=True max_pass_per_cell_event=3 cap_hits=0 rank1_tracks=bg043/bg032 true_rank=113 n_ranked=2359 rank1_err_m=9107 rank1_nunmatched=0 true_nunmatched=1 amb=unique
+   (54s)
+K= 60 seed=2 label=strict offset=29 silence=18 far_full=0 bg_full=0 true_survives=True max_pass_per_cell_event=1 cap_hits=0 rank1_tracks=ev0/ev1 true_rank=1 n_ranked=18 rank1_err_m=66 rank1_nunmatched=0 true_nunmatched=0 amb=unique
+K= 60 seed=2 label=robust offset=1365 silence=1282 far_full=11 bg_full=11 true_survives=True max_pass_per_cell_event=3 cap_hits=0 rank1_tracks=ev0/ev1 true_rank=1 n_ranked=1282 rank1_err_m=66 rank1_nunmatched=0 true_nunmatched=0 amb=unique
+K= 60 seed=2 label=strict/noadsb2 offset=11 silence=0 far_full=0 bg_full=0 true_survives=False max_pass_per_cell_event=1 cap_hits=0
+K= 60 seed=2 label=robust/noadsb2 offset=1259 silence=1192 far_full=11 bg_full=11 true_survives=True max_pass_per_cell_event=3 cap_hits=0 rank1_tracks=bg032/bg002 true_rank=16 n_ranked=1192 rank1_err_m=8295 rank1_nunmatched=0 true_nunmatched=1 amb=ambiguous
+   (25s)
+K=120 seed=0 label=strict offset=154 silence=28 far_full=0 bg_full=0 true_survives=True max_pass_per_cell_event=3 cap_hits=0 rank1_tracks=ev0/ev1 true_rank=1 n_ranked=28 rank1_err_m=66 rank1_nunmatched=0 true_nunmatched=0 amb=unique
+K=120 seed=0 label=robust offset=3052 silence=2730 far_full=125 bg_full=125 true_survives=True max_pass_per_cell_event=3 cap_hits=0 rank1_tracks=ev0/ev1 true_rank=1 n_ranked=2730 rank1_err_m=66 rank1_nunmatched=0 true_nunmatched=0 amb=unique
+K=120 seed=0 label=strict/noadsb2 offset=126 silence=0 far_full=0 bg_full=0 true_survives=False max_pass_per_cell_event=3 cap_hits=0
+K=120 seed=0 label=robust/noadsb2 offset=3001 silence=2688 far_full=125 bg_full=125 true_survives=True max_pass_per_cell_event=3 cap_hits=0 rank1_tracks=bg079/bg022 true_rank=178 n_ranked=2688 rank1_err_m=8955 rank1_nunmatched=0 true_nunmatched=1 amb=unique
+   (67s)
+K=120 seed=1 label=strict offset=85 silence=41 far_full=1 bg_full=0 true_survives=True max_pass_per_cell_event=2 cap_hits=0 rank1_tracks=ev0/ev1 true_rank=2 n_ranked=41 rank1_err_m=150 rank1_nunmatched=0 true_nunmatched=0 amb=unique
+K=120 seed=1 label=robust offset=2119 silence=1956 far_full=39 bg_full=38 true_survives=True max_pass_per_cell_event=2 cap_hits=0 rank1_tracks=ev0/ev1 true_rank=2 n_ranked=1956 rank1_err_m=150 rank1_nunmatched=0 true_nunmatched=0 amb=unique
+K=120 seed=1 label=strict/noadsb2 offset=44 silence=0 far_full=0 bg_full=0 true_survives=False max_pass_per_cell_event=2 cap_hits=0
+K=120 seed=1 label=robust/noadsb2 offset=2020 silence=1860 far_full=38 bg_full=38 true_survives=True max_pass_per_cell_event=2 cap_hits=0 rank1_tracks=bg049/bg084 true_rank=51 n_ranked=1860 rank1_err_m=6950 rank1_nunmatched=0 true_nunmatched=1 amb=unique
+   (41s)
+K=120 seed=2 label=strict offset=178 silence=9 far_full=0 bg_full=0 true_survives=True max_pass_per_cell_event=2 cap_hits=0 rank1_tracks=ev0/ev1 true_rank=1 n_ranked=9 rank1_err_m=66 rank1_nunmatched=0 true_nunmatched=0 amb=unique
+K=120 seed=2 label=robust offset=2824 silence=2363 far_full=137 bg_full=136 true_survives=True max_pass_per_cell_event=2 cap_hits=0 rank1_tracks=ev0/ev1 true_rank=1 n_ranked=2363 rank1_err_m=66 rank1_nunmatched=0 true_nunmatched=0 amb=unique
+K=120 seed=2 label=strict/noadsb2 offset=167 silence=0 far_full=0 bg_full=0 true_survives=False max_pass_per_cell_event=2 cap_hits=0
+K=120 seed=2 label=robust/noadsb2 offset=2731 silence=2311 far_full=135 bg_full=135 true_survives=True max_pass_per_cell_event=2 cap_hits=0 rank1_tracks=bg071/bg088 true_rank=152 n_ranked=2311 rank1_err_m=8088 rank1_nunmatched=0 true_nunmatched=1 amb=ambiguous
+   (76s)
+K=240 seed=0 label=strict offset=430 silence=15 far_full=0 bg_full=0 true_survives=True max_pass_per_cell_event=3 cap_hits=0 rank1_tracks=ev0/ev1 true_rank=1 n_ranked=15 rank1_err_m=66 rank1_nunmatched=0 true_nunmatched=0 amb=unique
+K=240 seed=0 label=robust offset=3653 silence=2544 far_full=269 bg_full=269 true_survives=True max_pass_per_cell_event=4 cap_hits=0 rank1_tracks=ev0/ev1 true_rank=1 n_ranked=2544 rank1_err_m=66 rank1_nunmatched=0 true_nunmatched=0 amb=unique
+K=240 seed=0 label=strict/noadsb2 offset=415 silence=0 far_full=0 bg_full=0 true_survives=False max_pass_per_cell_event=3 cap_hits=0
+K=240 seed=0 label=robust/noadsb2 offset=3607 silence=2525 far_full=269 bg_full=269 true_survives=True max_pass_per_cell_event=4 cap_hits=0 rank1_tracks=bg113/bg047 true_rank=310 n_ranked=2525 rank1_err_m=7713 rank1_nunmatched=0 true_nunmatched=1 amb=ambiguous
+   (104s)
+K=240 seed=1 label=strict offset=148 silence=21 far_full=0 bg_full=0 true_survives=True max_pass_per_cell_event=2 cap_hits=0 rank1_tracks=ev0/ev1 true_rank=1 n_ranked=21 rank1_err_m=66 rank1_nunmatched=0 true_nunmatched=0 amb=unique
+K=240 seed=1 label=robust offset=3080 silence=2371 far_full=100 bg_full=100 true_survives=True max_pass_per_cell_event=3 cap_hits=0 rank1_tracks=ev0/ev1 true_rank=1 n_ranked=2371 rank1_err_m=66 rank1_nunmatched=0 true_nunmatched=0 amb=unique
+K=240 seed=1 label=strict/noadsb2 offset=124 silence=0 far_full=0 bg_full=0 true_survives=False max_pass_per_cell_event=2 cap_hits=0
+K=240 seed=1 label=robust/noadsb2 offset=2983 silence=2278 far_full=100 bg_full=100 true_survives=True max_pass_per_cell_event=3 cap_hits=0 rank1_tracks=bg186/bg220 true_rank=107 n_ranked=2278 rank1_err_m=9404 rank1_nunmatched=0 true_nunmatched=1 amb=ambiguous
+   (77s)
+K=240 seed=2 label=strict offset=172 silence=12 far_full=0 bg_full=0 true_survives=True max_pass_per_cell_event=3 cap_hits=0 rank1_tracks=ev0/ev1 true_rank=1 n_ranked=12 rank1_err_m=66 rank1_nunmatched=0 true_nunmatched=0 amb=unique
+K=240 seed=2 label=robust offset=4079 silence=2523 far_full=105 bg_full=100 true_survives=True max_pass_per_cell_event=5 cap_hits=0 rank1_tracks=ev0/ev1 true_rank=1 n_ranked=2523 rank1_err_m=66 rank1_nunmatched=0 true_nunmatched=0 amb=unique
+K=240 seed=2 label=strict/noadsb2 offset=155 silence=0 far_full=0 bg_full=0 true_survives=False max_pass_per_cell_event=3 cap_hits=0
+K=240 seed=2 label=robust/noadsb2 offset=4009 silence=2487 far_full=100 bg_full=100 true_survives=True max_pass_per_cell_event=5 cap_hits=0 rank1_tracks=bg106/bg038 true_rank=103 n_ranked=2487 rank1_err_m=7491 rank1_nunmatched=0 true_nunmatched=1 amb=unique
+   (102s)

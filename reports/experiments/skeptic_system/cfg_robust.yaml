@@ -1,0 +1,335 @@
+search:
+  mode: regional
+region:
+  name: synth_boulder
+  regions_path: inputs/search_regions.gpkg
+  ground_elev_m: 1600.0
+dem:
+  path: null
+  geoid_undulation_m: -16.0
+geoid:
+  grid_dir: data/proj
+  grids:
+  - us_noaa_g2018u0.tif
+  - us_nga_egm96_15.tif
+time_prior:
+  mode: known
+  start_utc: '2026-06-15T14:00:00Z'
+  window_utc: null
+  clock_tol_s: 10.0
+environment:
+  temperature_c: 20.0
+  temperature_search_c: null
+mic:
+  height_agl_m: 1.5
+spectrogram:
+  analysis_fs_hz: 8000
+  window_s: 1.0
+  overlap: 0.9
+  fmax_hz: 3900.0
+spectrogram_jet:
+  analysis_fs_hz: 8000
+  window_s: 0.25
+  overlap: 0.75
+  fmax_hz: 3900.0
+detect:
+  band_hz:
+  - 40
+  - 900
+  bands_hz:
+  - - 40
+    - 900
+  jet_bands_hz:
+  - - 900
+    - 3800
+  floor_mode: freq
+  floor_halfwidth_hz: 20.0
+  smooth_s: 3.0
+  trigger_db: 10.0
+  extend_db: 4.0
+  baseline_percentile: 20.0
+  baseline_theory_slack_db: 1.0
+  min_duration_s: 20.0
+  pad_s: 5.0
+  split_dip_db: 6.0
+  chunk_s: 120.0
+  broadband_trigger: true
+  manual_windows: []
+ridge:
+  max_up_hz_per_s: 4.0
+  max_down_hz_per_s: 60.0
+  jump_penalty_db_per_hz: 0.5
+  weak_db: 12.0
+  outlier_hz: 3.0
+  min_points: 50
+  min_ridge_s: 5.0
+  harmonic_db: 8.0
+  max_ridges: 4
+  mask_halfwidth_hz: 4.0
+  guide_hz: 3.0
+  guided_passes: 2
+  floor_mode: freq
+  floor_halfwidth_hz: 20.0
+  seed_mode: hough
+  hough_dlogf: 0.008
+  hough_dt_s: 0.5
+  hough_cap_db: 25.0
+  hough_harmonics: 3
+  hough_dilate_bins: 3
+  hough_v_range_mps:
+  - 35
+  - 260
+  hough_v_step: 0.12
+  hough_tau_range_s:
+  - 2
+  - 80
+  hough_tau_step: 0.3
+  hough_t0_margin_s: 20.0
+  hough_nms_s: 4.0
+ridge_jet:
+  max_up_hz_per_s: 15.0
+  max_down_hz_per_s: 250.0
+  weak_db: 10.0
+  outlier_hz: 8.0
+  min_ridge_s: 10.0
+  guide_hz: 8.0
+  mask_halfwidth_hz: 10.0
+  hough_harmonics: 1
+fit:
+  v_bounds_mps:
+  - 10
+  - 320
+  d_bounds_m:
+  - 20
+  - 30000
+  t0_margin_s: 60.0
+  corr_inflation: null
+  outlier_sigma: 4.0
+  min_descent_frac: 0.02
+  f0_drift_prior_per_s: 0.0001
+classify:
+  prop_band_hz:
+  - 40
+  - 900
+  jet_band_hz:
+  - 900
+  - 3800
+  broadband_band_hz:
+  - 150
+  - 3500
+  broadband_percentile: 20.0
+  harmonic_weak_db: 8.0
+  max_harmonic: 5
+  prop_min_harmonics: 1
+  jet_min_broadband_rise_db: 12.0
+  dedupe_dt_s: 3.0
+  dedupe_v_frac: 0.15
+  dedupe_d_frac: 0.35
+  dedupe_ratio_tol: 0.03
+  min_aircraft_speed_mps: 25.0
+tracks:
+  source: csv
+  path: data/tracks.csv
+  columns: {}
+  resample_s: 0.25
+  max_gap_s: 20.0
+  max_speed_mps: 350.0
+  outlier_m: 300.0
+  alt_outlier_m: 150.0
+  min_points: 5
+  min_geometric_frac: 0.5
+  velocity_source: adsb
+aircraft_types:
+  registry_path: data/aircraft_db.csv
+  type_table_path: null
+grid:
+  spacing_m: 200
+  crs: auto
+cascade:
+  n_sigma: 3.0
+  truncated_coverage: 2.0
+  truncated_tol_mult: 2.0
+  wind_sys_mps: 15.0
+  height_sys_m: 30.0
+  timing_sys_s: 1.0
+  baro_alt_tol_m: 150.0
+  gof_widening: true
+  tile_cells: 128
+  window_pad_s: 2.0
+  prune_height_margin_m: 5000.0
+  audible_slant_m:
+    prop: 3000.0
+    jet: 6000.0
+    unknown: 3000.0
+  silence_mode: reject
+  silence_max_unexplained: 0
+  silence_min_audible_s: 20.0
+  silence_dt_s: 1.0
+  explain_time_tol_s: 20.0
+  silence_audibility: probabilistic
+  silence_level_sigma_db: 6.0
+  silence_hard_prob: 0.99
+  max_unmatched_events: 1
+  silence_explain: cpa
+score:
+  dt_coarse_step_s: 0.5
+  dt_pad_s: 1.0
+  ridge_decimate_s: 0.5
+  huber_k: 3.0
+  sigma_floor_hz: 0.05
+  top_n: 10
+  refine_in_cell: true
+  refine_max_cells: 500
+  refine_dt_window_s: 3.0
+  silence_weight: 1.0
+  ambiguity_rel: 0.15
+  ambiguity_radius_m: 400.0
+  allow_shared_tracks: false
+  max_hypotheses_per_cell: 64
+outputs:
+  root: /private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system/runs
+  keep_runs: 5
+  write_grid: auto
+  max_raster_cells: 50000000
+  top_plot: 3
+viewer:
+  plotly_version: 2.35.2
+  plotly_sha256: 6d21266ce1bd7d9e5ab4e115989c70c20de0382fd973a8f26ab58619eba4d603
+  max_time_px: 1500
+  max_freq_px: 400
+  max_candidates: 20
+synth:
+  seed: 0
+  n_cascade_decoys: 3
+  duration_s: 600
+  fs_hz: 8000
+  n_tracks: 3
+  event_rx_times_s:
+  - 150
+  - 420
+  event_classes:
+  - prop
+  - prop
+  snr_db: 10.0
+  noise_band_hz:
+  - 40
+  - 1000
+  harmonic_amps:
+  - 1.0
+  - 0.5
+  - 0.3
+  f0_range_hz:
+  - 80
+  - 180
+  speed_range_mps:
+  - 35
+  - 90
+  alt_agl_range_m:
+  - 300
+  - 900
+  offset_range_m:
+  - 0
+  - 1500
+  jet_f0_range_hz:
+  - 900
+  - 2200
+  jet_harmonic_amps:
+  - 1.0
+  - 0.3
+  jet_speed_range_mps:
+  - 75
+  - 130
+  jet_alt_agl_range_m:
+  - 400
+  - 1500
+  jet_broadband_band_hz:
+  - 150
+  - 3500
+  jet_broadband_to_tone_db: 5.0
+  excess_atten_db_per_km: 3.0
+  f0_jitter_frac: 0.002
+  broadband_to_tone_db: 0.0
+  curved_fraction: 0.34
+  ref_distance_m: 1000.0
+  prop_snr_at_ref_db: -5.0
+  jet_snr_at_ref_db: 12.0
+  event_max_slant_frac: 0.6
+  n_decoys_per_event: 2
+  n_twins_per_event: 2
+  n_background: 10
+  decoy_target_slant_frac: 0.8
+  inaudible_margin: 1.2
+  skip_audio_beyond_m: 8000.0
+  unknown_type_frac: 0.1
+  track_dt_s: 0.25
+  track_pad_before_s: 180.0
+  track_pad_after_s: 60.0
+  mic_max_offset_m: 3000.0
+realism:
+  adsb_degrade: true
+  adsb_interval_s: 1.0
+  adsb_interval_jitter_s: 0.3
+  adsb_latency_s: 0.6
+  adsb_pos_sigma_m: 7.0
+  adsb_mlat_frac: 0.03
+  adsb_mlat_sigma_m: 100.0
+  adsb_geo_alt_sigma_m: 10.0
+  adsb_alt_quant_ft: 25.0
+  adsb_baro_only_frac_prop: 0.3
+  adsb_baro_offset_sigma_m: 60.0
+  adsb_speed_quant_kt: 1.0
+  adsb_vrate_quant_fpm: 64.0
+  adsb_gap_rate_per_min: 0.2
+  adsb_gap_s:
+  - 5.0
+  - 60.0
+  adsb_drop_prop_frac: 0.0
+  level_model: shared
+  level_sigma_db: 6.0
+  event_min_snr_db: 0.0
+  harmonic_model: rich
+  n_harmonics: 10
+  harmonic_slope_db: -3.0
+  harmonic_scatter_db: 6.0
+  half_order_db: -12.0
+  rpm_walk_frac: 0.003
+  rpm_ramp_prob: 0.3
+  rpm_ramp_frac:
+  - 0.03
+  - 0.1
+  twin_prob: 0.3
+  twin_detune_frac:
+  - 0.002
+  - 0.01
+  directivity_db: 6.0
+  absorption: iso9613
+  humidity_pct: 70.0
+  ground_reflection: true
+  reflection_coef:
+  - 0.8
+  - 1.0
+  wind_max_mps: 10.0
+  c_mismatch_mps: 3.0
+  noise_model: realistic
+  wind_noise_db: 6.0
+  hum_db: -10.0
+  n_car_passes: 2
+  car_db: 10.0
+  n_bird_chirps: 20
+  bird_db: 0.0
+  highpass_hz: 100.0
+  agc_strength: 0.5
+  clock_offset_max_s: 5.0
+  corridor_frac: 0.5
+  corridor_spread_deg: 20.0
+  climb_prob: 0.4
+  climb_mps:
+  - 3.0
+  - 5.0
+  speed_ramp_prob: 0.3
+  speed_ramp_frac: 0.1
+  turn_rate_max_deg_s: 3.0
+  n_near_traffic: 4
+  mic_height_range_m:
+  - 1.0
+  - 10.0

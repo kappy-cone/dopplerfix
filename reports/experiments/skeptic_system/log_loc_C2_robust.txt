@@ -1,0 +1,16 @@
+/Users/williambarr/qgis/doppler/tracks.py:297: RuntimeWarning: invalid value encountered in cast
+  i0 = np.floor(u).astype(np.int64)
+run C2_robust: region synth_boulder, 6 events, 33 track segments, grid EPSG:32613
+  event 0 (unknown): t_rx 9.39s v 25.6±15.1 d 51±185 t±6.94s (w_cov 1)
+  event 1 (prop): t_rx 15.09s v 62.0±20.7 d 1110±654 t±4.08s (w_cov 4)
+  event 2 (prop): t_rx 28.79s v 60.5±186.4 d 2585±16434 t±74.39s (w_cov 4)
+  event 3 (prop): t_rx 32.95s v 64.0±233.5 d 3026±21050 t±53.66s (w_cov 4)
+  event 4 (unknown): t_rx 40.30s v 55.5±375.4 d 712±5418 t±73.66s (w_cov 2)
+  event 5 (prop): t_rx 45.04s v 89.0±24.0 d 1165±786 t±4.36s (w_cov 4)
+  survivors: grid 2,821 -> cpa 233 -> offset 118 -> silence 117  (silence removed 1)
+  true cell: reached silence; rank 2 of 117 (interim 23); rank-1 error 70 m; assignment correct: True
+  ranking: unique (4 tied within 15%, spread 93 m, rank-2/rank-1 1.03)
+  #1 40.05195,-105.23123 score 6.995 Δt +3.67s tracks ['—', 'e1569e', '175625', 'a8aae9', 'bddf87', '3840a7'] rms [nan, 0.23, 0.0, 0.21, 2.73, 0.75] Hz silence 1.6 nats
+  #2 40.05241,-105.23125 score 7.171 Δt +3.79s tracks ['—', 'e1569e', '175625', 'a8aae9', 'bddf87', '3840a7'] rms [nan, 0.29, 0.0, 0.21, 2.75, 0.51] Hz silence 1.5 nats
+  #3 40.05197,-105.23213 score 7.670 Δt +4.40s tracks ['—', 'e1569e', '175625', 'a8aae9', '42e710', '3840a7'] rms [nan, 0.23, 0.0, 0.22, 2.16, 1.67] Hz silence 1.5 nats
+  time 501.5s (events 5.6, cascade 79.50, score 415.79 for 7488 hypotheses); disk 0.81 MB -> /private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system/runs/C2_robust
