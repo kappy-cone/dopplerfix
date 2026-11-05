@@ -48,8 +48,8 @@ def arm_cfg(cfg: dict, arm: str) -> dict:
     return deep_merge(cfg, over)
 
 
-def one(unit):
-    conf, seed, arms, scenario = unit
+def scenario_audio(conf: str, seed: int, scenario: str):
+    """(cfg, scenario, truth dict, mono audio, fs): the scenario exactly as `cli.py ablate` builds and writes it."""
     from doppler import export
 
     cfg = load_config(CONFIG)
@@ -69,7 +69,12 @@ def one(unit):
         x, fs = sf.read(tmp / "audio.flac", always_2d=False)   # exactly what the CLI would analyse
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    xm = audio.mix_to_mono(x)
+    return cfg, sc, truth, audio.mix_to_mono(x), fs
+
+
+def one(unit):
+    conf, seed, arms, scenario = unit
+    cfg, _, truth, xm, fs = scenario_audio(conf, seed, scenario)
     tol = float(section(cfg, "evaluate").get("match_tol_s", 10.0))
     info = {a["icao24"]: a for a in truth.get("aircraft", [])} if isinstance(truth.get("aircraft"), list) else \
         (truth.get("aircraft") or {})
