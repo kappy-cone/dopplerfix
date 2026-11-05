@@ -3,26 +3,66 @@
 Read CLAUDE.md first; it is authoritative for methodology and conventions. This file
 records session state, decisions, and what is fragile.
 
-## START HERE (session 6: U19 detection, plan §8.2; branch `s6-u19-detection`)
-Read `NEXT_SESSION.md` (the session 6 prompt), CONTRIBUTING.md (branches, PRs, §7 CI), plan §8.2–8.4, and the
-U18 section at the end of `reports/stageA.md`.
-- **Where things stand.** Phase 1's P1.1 + P1.4 arms (V1c, V0c) failed U18: V1c's precision of unique is 61 %, but
-  its rank-1 accuracy (status ignored) drops from V1's 34 to 25 on all-on C n = 100. They stay comparison arms.
-  The U18 reference rows are in `reports/data/` (`stageA_rows.jsonl.gz`, `u18_rows.jsonl.gz`, plus per-unit
-  detection counts).
-- **U19.** Detection arms (a) harmonic-summed row, (b) 3 s long-window rows, (c) 20–100 Hz low-band row. All are
-  in `doppler/detect.py`, off by default (V0/V1 rows unchanged), registered in `reports/apriori_registry.md`. The
-  detection-only screen is `reports/experiments/u19/screen.py`. Stop points: after the screen, and after the
-  pre-registered acceptance rule.
-- **Where Stage A's missed events are lost** (baseline screen, all-on seeds 0–49): of 25 missed truth events,
-  14 have a detection window but no fitted event (lost in ridge / fit), 6 never trigger, and 5 trigger nearby
-  without a window. The §8.2 arms act only on the statistic. In `loo:path` and `sub:reflection` most misses never
-  trigger.
-- **Tests:** the fast suite takes about 2–4.5 min locally (CI shards it, CONTRIBUTING §7); the slow suite about
-  6 min.
-- **Waiting for the user, after U19's decision run** (`config.yaml` stays as it is until then, so the config
-  hash is stable): `aircraft_types.type_table_path: data/doc8643_types.csv` (real tracks only), and whether to
-  add `tracks.drop_onground` (a config key and a TrackParams field together).
+## START HERE (session 8: U19 task 3, the arm-b decision run; plan §8.2)
+Read `NEXT_SESSION.md` (the session 8 prompt), CONTRIBUTING.md (§1, §4 decision runs, §7 CI), and in
+`reports/u19.md` the D1 + E1 section and "Step 3: pre-registered acceptance rule for arm b".
+- **Where things stand.** PR #6 is merged (main 3f234d7). It added:
+  - the D1 + E1 diagnostics;
+  - the pre-registered acceptance rule for arm b;
+  - the `config.yaml` variants **V1b / V0b** (V1 / V0 + `detect.long_window_s: 3.0`);
+  - the fixed decision analysis `reports/experiments/u19/decision.py`.
+
+  The rule was approved by the user before the merge, unchanged. C3 stays a strict point rule: V1b rank-1
+  accuracy ≥ V1's 34.
+- **Task 3 is next and has not started:** the decision run, V0b and V1b, all-on C, seeds 0–99.
+  - **Where to run it:** from a clean `main` on the compute machine that produced the Stage A / U18 rows, at
+    `--jobs 8` with the 900 s cap (timeouts are wall-clock).
+  - **Commands:**
+    ```bash
+    .venv/bin/python cli.py ablate --plan stageA --limit 50 --variants V0b,V1b --jobs 8 --out outputs/ablation/u19
+    .venv/bin/python cli.py ablate --plan stageA_ext --variants V0b,V1b --jobs 8 --out outputs/ablation/u19
+    .venv/bin/python cli.py ablate --summarize --out outputs/ablation/u19
+    .venv/bin/python reports/experiments/u19/decision.py --rows outputs/ablation/u19/rows.jsonl --jobs 14
+    ```
+    `--plan stageA --limit 50` is exactly all-on C seeds 0–49, and `stageA_ext` is seeds 50–99.
+  - **Estimated time:**
+    - the run: about 35–50 min. The committed V0 + V1 rows on these seeds total about 4 h of compute, which is
+      about 30 min at 8 jobs if perfectly packed, plus the 900 s tail and somewhat more hypotheses under V1b;
+    - `decision.py`: about 6 min (it rebuilds 100 scenarios for the SNR table);
+    - the write-up: about 20 min.
+  - **Order of reading:** the validity checks (V1 detection agreement, V2 identical-detection runs reproduce
+    V0 / V1) come first. If either fails, stop and investigate before reading C1–C3.
+  - **After the run:**
+    - hand-check at least 5 seeds whose V1 rank-1 result changed;
+    - commit the rows gzip-compressed as `reports/data/u19_rows.jsonl.gz`;
+    - write the results into `reports/u19.md`, on a branch, with a PR. Edit in a separate worktree while the
+      run uses this checkout.
+  - **Stop for the user after task 3.** On acceptance, making 3.0 the default for V0 and V1 is the user's call.
+- **Then task 4 (only after task 3).** The user approved a **seed-to-ridge hand-off arm** (session 7). D1
+  showed that "window, no fit" misses are lost when the guided ridge around the Hough seed comes back short and
+  the peel `break`s out of the window, not at the 12 dB gate.
+  - **Rules:** register it before its first measurement, off by default, screened on six configs × seeds 0–49,
+    paired by audio.
+  - **First step:** measure the seed curve's offset from the ridge, which the trace does not record.
+  - D2, E2 and D3 are not indicated by D1 / E1 (see `reports/u19.md`, "Reading").
+- **Screen rows are not committed** (screen rule). Re-create them with `reports/experiments/u19/d1.py --jobs 14`,
+  about 20–25 min on the compute machine, and summarise with `d1_summary.py` / `summarize.py`.
+- **Tests:** the fast suite takes about 20 s locally at `-n 8`, with 172 passing at 3f234d7.
+- **Waiting for the user, after U19's decision run** (`config.yaml` stays as it is until then):
+  `aircraft_types.type_table_path: data/doc8643_types.csv` (real tracks only), and whether to add
+  `tracks.drop_onground` (a config key and a TrackParams field together).
+
+## Sessions 6–7 summary (U19 steps 1–3)
+- **Session 6:** arms a, b, c built, off by default. The detection-only screen found that only arm b matters
+  (all-on recall 75 → 82 / 100, p = 0.016). Brainstorm F1–F3 and the literature note
+  `docs/u19_detection_literature.md`.
+- **Session 7 (PR #6):**
+  - **D1:** all-on base misses are 11 without a window, 10 with no ridge (guided ridge too short), 3
+    mis-timed fits and 1 too slow. F2's guess of 6 mis-timed was too high.
+  - **E1 oracle ladder, all-on recall:** 75 base, 82 arm b, 84 oracle windows, 87 oracle seed, 98 truth
+    ridge.
+  - **E3:** recall against SNR, added to `summarize.py`.
+  - The acceptance rule and the V1b / V0b overlays.
 
 ## Session 5 summary (Stage A, §8.1 measures, profile, P1.1/P1.4 and U18)
 **Session 5.** New machine set up: 157 tests passed (133
