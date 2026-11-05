@@ -205,6 +205,13 @@ variants:
   V0c:
     cascade: {max_unmatched_events: 0, silence_audibility: hard, weak_event_rel_sigma: null}
     score: {likelihood: calibrated, ambiguity_mode: v2}
+  # U19 arm (b) comparison arms (never defaults; the U19 acceptance rule in reports/u19.md decides): the 3 s
+  # long-window detection rows (detect.long_window_s, source in reports/apriori_registry.md) on V1 and V0
+  V1b:
+    detect: {long_window_s: 3.0}
+  V0b:
+    cascade: {max_unmatched_events: 0, silence_audibility: hard, weak_event_rel_sigma: null}
+    detect: {long_window_s: 3.0}
 
 score:                       # locked N-event scoring: one shared Δt, one f0 per event
   dt_coarse_step_s: 0.5      # coarse Δt grid over each hypothesis' feasible interval, then bounded refinement

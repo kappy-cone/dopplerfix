@@ -48,10 +48,8 @@ def arm_cfg(cfg: dict, arm: str) -> dict:
     return deep_merge(cfg, over)
 
 
-def one(unit):
-    conf, seed, arms, scenario = unit
-    from doppler import export
-
+def build_scenario(conf: str, seed: int, scenario: str):
+    """(cfg, scenario object) exactly as `cli.py ablate` builds it (no audio written)."""
     cfg = load_config(CONFIG)
     _, region = load_region(cfg, None)
     _, radius = region_frame(region)
@@ -62,6 +60,14 @@ def one(unit):
     sp.setdefault("mic_height_m", section(cfg, "mic").get("height_agl_m", 1.5))
     params = synth.SynthParams.from_dict(sp)
     sc, _, _ = build_synth_scenario(cfg, region, params, realism_for(cfg, conf), params.n_cascade_decoys)
+    return cfg, sc
+
+
+def scenario_audio(conf: str, seed: int, scenario: str):
+    """(cfg, scenario, truth dict, mono audio, fs): the scenario exactly as `cli.py ablate` builds and writes it."""
+    from doppler import export
+
+    cfg, sc = build_scenario(conf, seed, scenario)
     tmp = Path(tempfile.mkdtemp(prefix="u19_"))
     try:
         export.write_scenario(sc, tmp)
@@ -69,7 +75,12 @@ def one(unit):
         x, fs = sf.read(tmp / "audio.flac", always_2d=False)   # exactly what the CLI would analyse
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    xm = audio.mix_to_mono(x)
+    return cfg, sc, truth, audio.mix_to_mono(x), fs
+
+
+def one(unit):
+    conf, seed, arms, scenario = unit
+    cfg, _, truth, xm, fs = scenario_audio(conf, seed, scenario)
     tol = float(section(cfg, "evaluate").get("match_tol_s", 10.0))
     info = {a["icao24"]: a for a in truth.get("aircraft", [])} if isinstance(truth.get("aircraft"), list) else \
         (truth.get("aircraft") or {})
