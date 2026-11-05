@@ -37,14 +37,10 @@ Re-check the layout and the per-hour size once the folder is populated again, be
 be read today, so read it before any use, and cite OpenSky as it asks.
 
 ## 2. Proposal
-1. **Now (for approval):** the aircraft metadata, so that real tracks get prop/jet classes:
-   - `aircraft-database-complete-2025-08.csv` (108 MB). Keep only `icao24` and `typecode` (plus the
-     aircraft-class column if present) as a small zstd Parquet in `data/`, then delete the CSV
-     (CLAUDE.md Storage);
-   - `doc8643AircraftTypes.csv` (0.7 MB), the `type_table` for `build_lookup`.
-
-   Check the complete dump's header on download. The README says its columns differ from the old dumps.
-   `build_lookup` needs `icao24` and `typecode`. The description comes from Doc 8643.
+1. **Aircraft metadata: done** (approved and downloaded 2026-11-04; details in §5).
+   - The registry is `data/aircraft_db.csv`, the path `aircraft_types.registry_path` already names.
+   - The type table is `data/doc8643_types.csv`. It is not used until `aircraft_types.type_table_path`
+     points at it, which is a config.yaml change for its owner.
 2. **State vectors for any date, including field-recording dates: Trino**, through the user's account, from
    the `state_vectors_data4` table (one state vector per aircraft per second). It has the same column names
    as the CSV, so the mapping below applies unchanged. Crop in the SQL to the region bounding box, the time
@@ -112,3 +108,56 @@ Tests: `tests/test_opensky.py`, on a 14-row hand-made CSV in the documented layo
    and writing zstd Parquet with only the §3 columns belongs in `cli.py`. That file is owned by another
    session now. `cli.load_tracks` already reads a CSV or Parquet in OpenSky naming through
    `tracks_from_frame`.
+
+## 5. Aircraft metadata as downloaded (2026-11-04)
+**Sources** (`s3.opensky-network.org/data-samples/metadata/`; MD5 = S3 ETag, checked):
+
+| File | Size | MD5 | Last modified |
+|---|---|---|---|
+| `aircraft-database-complete-2025-08.csv` | 107,956,517 B | `117e1faac0f9d28acc0f513030396e10` | 2025-08-22 |
+| `doc8643AircraftTypes.csv` | 695,252 B | `3c084f93161e30a4efe289149f3e7184` | 2024-11-04 |
+
+**Registry format.**
+- The complete dump quotes with **single quotes**, so `pd.read_csv` needs `quotechar="'"`. Read with the
+  default quote character, the column names keep their quotes and `build_lookup` fails. So never point
+  `registry_path` at the raw file.
+- It has 32 columns:
+  `icao24, timestamp, acars, adsb, built, categoryDescription, country, engines, firstFlightDate, firstSeen,
+  icaoAircraftClass, lineNumber, manufacturerIcao, manufacturerName, model, modes, nextReg, notes, operator,
+  operatorCallsign, operatorIata, operatorIcao, owner, prevReg, regUntil, registered, registration, selCal,
+  serialNumber, status, typecode, vdl`.
+- `icaoAircraftClass` holds the ICAO description (`L1P`, `L2J`, ...), i.e. what `build_lookup` calls
+  `icaoaircrafttype`.
+- All 616,675 rows parse with 32 fields.
+
+**Doc 8643 format.** Ordinary double-quoted CSV with the columns
+`AircraftDescription, Description, Designator, EngineCount, EngineType, ManufacturerCode, ModelFullName,
+WTC`. `Designator` is the type code and `Description` is the ICAO description. There are 2,640 designators,
+none with conflicting descriptions.
+
+**Cropped files** (`data/`, gitignored; the raw registry was deleted afterwards, the raw Doc 8643 kept):
+- `aircraft_db.csv`, 8.8 MB:
+  - columns `icao24` (lower-case), `typecode` (upper-case), and `icaoaircrafttype` (from
+    `icaoAircraftClass`);
+  - 27 rows with an `icao24` that is not 6 hex digits were dropped; there are no duplicate `icao24`s;
+  - 515,388 rows have a typecode, and 429,268 have a description.
+- `doc8643_types.csv`, 23 kB: columns `typecode` (from `Designator`) and `description`, duplicates removed.
+- To rebuild: re-download and repeat these renames.
+
+  The crop is I/O, so it belongs in `cli.py` (e.g. an `aircraft-db` subcommand) once that file is free. The
+  one-off script used here was not committed.
+
+**Classes, through `aircraft_types.build_lookup` as `cli.classify_tracks` would call it:**
+
+| Lookup | prop | jet | unknown |
+|---|---|---|---|
+| registry only (config today) | 354,632 | 74,602 | 187,414 |
+| registry + Doc 8643 | 376,476 | 84,951 | 155,221 |
+| … US address block (a00000–adf7c7), registry only | 235,129 | 30,534 | 91,174 (25.7 %) |
+| … US address block, registry + Doc 8643 | 242,765 | 34,226 | 79,846 (22.4 %) |
+
+- Most remaining unknowns that have a typecode are not powered fixed-wing types in Doc 8643: `GLID`,
+  `BALL`, `ULAC`, `PARA`, `ZZZZ`, `DRON`, `GYRO`. A few are non-ICAO codes in the registry (e.g. `G550`
+  where ICAO uses `GLF5`, and `K100`).
+- Unknown matches either event class (CLAUDE.md type-code gaps), so these cost pruning power, not
+  correctness. The classification rule is unchanged.
