@@ -201,20 +201,46 @@ def candidate_view(d: dict, events, ts, prior, c: float, spec=None, step_s: floa
         ratio, _, _, ok = modeled_ratio(d.get("xyz_est", d["xyz"]), k_, ts, prior.start_s + d["dt_s"] + tt, c)
         f0, v, dist = float(d["f0"][e]), float(cp["speed_mps"]), float(cp["r_m"])
         fpre, fpost = ph.straight_asymptotes(f0, v, c)
-        _, _, alt = ecef_to_geodetic(cp["pos"])
+        cla, clo, alt = ecef_to_geodetic(cp["pos"])
         curves.append({
             "icao24": str(ts.icao24[k_]), "callsign": str(ts.callsign[k_]), "f0_hz": f0,
             "t0_s": float(tt[0]), "step_s": step_s, "ratio": _nan_list(np.where(ok, ratio, np.nan), 7),
             "rms_hz": float(d["rms"][e]), "n_missing": int(d["n_missing"][e]),
             "geom": {"v_mps": v, "d_m": dist, "t0_rel_s": cp["t_emit_s"] - prior.start_s - d["dt_s"],
                      "t_rx_rel_s": cp["t_emit_s"] + dist / c - prior.start_s - d["dt_s"], "alt_m": float(alt),
-                     "f_pre_hz": fpre, "f_post_hz": fpost, "max_roc_hz_s": ph.straight_max_rate(f0, v, dist, c)},
+                     "f_pre_hz": fpre, "f_post_hz": fpost, "max_roc_hz_s": ph.straight_max_rate(f0, v, dist, c),
+                     "cpa_lat": float(cla), "cpa_lon": float(clo)},
         })
     return {"cell_id": int(d["cell_id"]), "rank": int(d["rank"]), "score": float(d["score"]),
             "interim_rank": int(d["interim_rank"]), "lat": float(d.get("est_lat", d["lat"])),
             "lon": float(d.get("est_lon", d["lon"])),
             "dt_s": float(d["dt_s"]), "dt_lo_s": float(d["dt_lo_s"]), "dt_hi_s": float(d["dt_hi_s"]),
             "label": f"{d['lat']:.4f},{d['lon']:.4f}", "curves": curves}
+
+
+def map_layers(surv: list[dict], ts, n_candidates: int, max_cells: int = 20000, step_s: float = 2.0,
+               style: str = "open-street-map") -> dict:
+    """Viewer map data (display only): every scored cell's refined location and score (best first, capped at
+    ``max_cells``), and the tracks assigned to the first ``n_candidates`` candidates, downsampled to ``step_s``."""
+    from .geo import ecef_to_geodetic
+
+    cells = surv[:max_cells]
+    assigned = sorted({k for d in surv[:n_candidates] for k in d["tracks"] if k >= 0})
+    step = max(1, int(round(step_s / ts.dt_s)))
+    trk = []
+    for k in assigned:
+        xyz = ts.xyz[k][ts.valid()[k]][::step]
+        if len(xyz) < 2:
+            continue
+        la, lo, _ = ecef_to_geodetic(xyz)
+        trk.append({"icao24": str(ts.icao24[k]), "callsign": str(ts.callsign[k]),
+                    "lat": np.round(la, 6).tolist(), "lon": np.round(lo, 6).tolist()})
+    return {"style": style, "n_cells_total": len(surv),
+            "cells": {"lat": [round(float(d.get("est_lat", d["lat"])), 6) for d in cells],
+                      "lon": [round(float(d.get("est_lon", d["lon"])), 6) for d in cells],
+                      "score": [float(np.float32(d["score"])) for d in cells],
+                      "rank": [int(d["rank"]) for d in cells]},
+            "tracks": trk}
 
 
 def event_window_spectrogram(x, fs: float, t_lo: float, t_hi: float, f_lo: float, f_hi: float,
@@ -240,13 +266,16 @@ def event_window_spectrogram(x, fs: float, t_lo: float, t_hi: float, f_lo: float
 
 def write_viewer(path: Path, run_id: str, x, fs: float, start_s: float, events, fits, candidates: list[dict],
                  plotly_rel: str = "../plotly.min.js", viewer_cfg: dict | None = None,
-                 score_params=None, c: float = 343.4) -> None:
+                 score_params=None, c: float = 343.4, map_data: dict | None = None) -> None:
     """Offline viewer (references one shared plotly.min.js). Two read-only modes:
 
     * Compare: one panel per event; the selected candidate's modeled curve with one shared Δt slider and an
       f0 slider per event; recording-fit vs candidate-geometry readouts; live score using the scorer's
       formula (pooled Huber, ridge-scatter units, unmodelable points penalised); snapshot log.
     * Event fit: free f0, v, d, t0 straight-line fit per event with f_pre / f_post / max RoC and a snapshot log.
+    * Map (when ``map_data``, from ``map_layers``): scored cells, top candidates and the selected candidate's
+      tracks and CPA points on an OpenStreetMap basemap. Tiles need a network connection; offline the layers
+      still draw on a blank background.
     """
     import base64
 
@@ -276,7 +305,7 @@ def write_viewer(path: Path, run_id: str, x, fs: float, start_s: float, events, 
         })
     data = {"run_id": run_id, "start_utc_s": start_s, "c": c, "huber_k": sp.huber_k,
             "miss_cost": float(huber(np.array(3.0 * sp.huber_k), sp.huber_k)),
-            "events": evs, "candidates": candidates}
+            "events": evs, "candidates": candidates, "map": map_data}
     html = (VIEWER_TEMPLATE.replace("__RUN_ID__", run_id).replace("__PLOTLY__", plotly_rel)
             .replace("__DATA__", json.dumps(data, separators=(",", ":"), allow_nan=False)))
     Path(path).write_text(html)
@@ -297,7 +326,7 @@ th:first-child,td:first-child{text-align:left} .note{font-size:12px;color:#666} 
 .btn.grey{background:#888} .panels{display:grid;gap:8px} .warn{color:#b00}
 </style></head><body>
 <h2>Doppler run <code>__RUN_ID__</code></h2>
-<div class="tabs"><button id="tabC" class="on">Compare candidates</button><button id="tabF">Event fit</button></div>
+<div class="tabs"><button id="tabC" class="on">Compare candidates</button><button id="tabF">Event fit</button><button id="tabM">Map</button></div>
 <div id="C">
  <div class="card"><div class="row"><b>Candidate</b><select id="cand"></select><span></span></div>
   <div id="cinfo" class="note"></div>
@@ -320,6 +349,14 @@ th:first-child,td:first-child{text-align:left} .note{font-size:12px;color:#666} 
  <div class="card"><b>Snapshot log</b> <span class="note">MIN/MAX auto-calculated, BEST = midpoint</span><br>
   <button class="btn" id="fsnap">Take snapshot</button><button class="btn grey" id="fclear">Clear log</button>
   <button class="btn grey" id="fdl">Download JSON</button><div id="flog" class="note"></div></div>
+</div>
+<div id="M" style="display:none">
+ <div class="card"><div class="row"><b>Candidate</b><select id="mcand"></select><span></span></div>
+  <div id="minfo" class="note"></div>
+  <div id="map" style="height:620px"></div>
+  <div class="note">Basemap © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors (tiles load online;
+   offline the layers draw on a blank background). Cells are each scored cell's refined location, coloured by log10 score
+   (lower is better). Click a candidate to select it. Read-only diagnostic.</div></div>
 </div>
 <script>
 const D = __DATA__;
@@ -426,11 +463,44 @@ document.getElementById('fsnap').onclick=()=>{const e=+fev.value;logF.push({even
 function renderLogF(){renderLog('flog',logF.filter(r=>r.event===+fev.value),['f0','v','d','t0']);}
 document.getElementById('fclear').onclick=()=>{logF=[];renderLogF();};
 document.getElementById('fdl').onclick=()=>dl(`${D.run_id}_eventfit_snapshots.json`,logF);
+// ---------- map ----------
+const MP=D.map, msel=document.getElementById('mcand');
+D.candidates.forEach((c,i)=>{const o=document.createElement('option');o.value=i;o.text=sel.options[i].text;msel.appendChild(o);});
+let mapView=null;
+function buildM(){const info=document.getElementById('minfo');
+ if(!MP){info.textContent='no map data in this run';return;}
+ if(!D.candidates.length){info.textContent='no candidates survived the cascade';return;}
+ msel.value=sel.value;const c=D.candidates[+sel.value],tr=[];
+ info.textContent=`${MP.cells.lat.length} of ${MP.n_cells_total} scored cells shown; candidate #${c.rank} at ${c.lat.toFixed(5)}, ${c.lon.toFixed(5)}, score ${c.score.toFixed(3)}, Δt ${c.dt_s.toFixed(2)} s`;
+ tr.push({type:'scattermap',lat:MP.cells.lat,lon:MP.cells.lon,mode:'markers',name:'scored cells',
+  marker:{size:7,color:MP.cells.score.map(s=>Math.log10(Math.max(s,1e-6))),colorscale:'Viridis',reversescale:true,opacity:0.8,
+   colorbar:{title:{text:'log10 score'},len:0.6,x:1}},
+  text:MP.cells.score.map((s,i)=>`rank ${MP.cells.rank[i]} · score ${s.toFixed(3)}`),hoverinfo:'text'});
+ const mine=new Set(c.curves.filter(k=>k).map(k=>k.icao24));
+ MP.tracks.forEach(t=>tr.push({type:'scattermap',lat:t.lat,lon:t.lon,mode:'lines',showlegend:false,
+  line:{width:mine.has(t.icao24)?4:2,color:mine.has(t.icao24)?'#e31a1c':'#777'},name:`${t.icao24} ${t.callsign}`,hoverinfo:'name'}));
+ c.curves.forEach((k,e)=>{if(!k||k.geom.cpa_lat===undefined)return;
+  tr.push({type:'scattermap',lat:[k.geom.cpa_lat,c.lat],lon:[k.geom.cpa_lon,c.lon],mode:'lines',showlegend:false,hoverinfo:'skip',
+   line:{width:1.5,color:'#e31a1c'}});
+  tr.push({type:'scattermap',lat:[k.geom.cpa_lat],lon:[k.geom.cpa_lon],mode:'markers',name:`event ${e} CPA`,
+   marker:{size:11,color:'#ff7f00'},text:[`event ${e}: ${k.icao24} ${k.callsign} · CPA ${k.geom.d_m.toFixed(0)} m · ${k.geom.alt_m.toFixed(0)} m alt`],hoverinfo:'text'});});
+ tr.push({type:'scattermap',lat:D.candidates.map(x=>x.lat),lon:D.candidates.map(x=>x.lon),mode:'markers',name:'top candidates',
+  marker:{size:11,color:'#111'},text:D.candidates.map(x=>`#${x.rank} · score ${x.score.toFixed(3)}`),hoverinfo:'text'});
+ tr.push({type:'scattermap',lat:[c.lat],lon:[c.lon],mode:'markers',name:`selected #${c.rank}`,marker:{size:18,color:'#e31a1c'},
+  text:[`#${c.rank} · score ${c.score.toFixed(3)}`],hoverinfo:'text'});
+ const el=document.getElementById('map');
+ const view=mapView||{style:MP.style,center:{lat:c.lat,lon:c.lon},zoom:12};
+ Plotly.react(el,tr,{map:view,margin:{l:0,r:0,t:0,b:0},showlegend:true,legend:{x:0,y:1,bgcolor:'rgba(255,255,255,0.8)'}});
+ if(!el._wired){el._wired=true;
+  el.on('plotly_relayout',()=>{const m=el._fullLayout.map;if(m)mapView={style:MP.style,center:m.center,zoom:m.zoom};});
+  el.on('plotly_click',ev=>{const p=ev.points[0];if(p&&p.data.name==='top candidates'){sel.value=p.pointNumber;buildC();buildM();}});}}
+msel.onchange=()=>{sel.value=msel.value;buildC();buildM();};
 // ---------- tabs ----------
-function tab(m){document.getElementById('C').style.display=m==='C'?'':'none';document.getElementById('F').style.display=m==='F'?'':'none';
- document.getElementById('tabC').classList.toggle('on',m==='C');document.getElementById('tabF').classList.toggle('on',m==='F');
- if(m==='F')buildF();else if(D.candidates.length)buildC();}
+function tab(m){['C','F','M'].forEach(k=>{document.getElementById(k).style.display=m===k?'':'none';
+  document.getElementById('tab'+k).classList.toggle('on',m===k);});
+ if(m==='F')buildF();else if(m==='M')buildM();else if(D.candidates.length)buildC();}
 document.getElementById('tabC').onclick=()=>tab('C');document.getElementById('tabF').onclick=()=>tab('F');
+document.getElementById('tabM').onclick=()=>tab('M');
 if(D.candidates.length)buildC();else{document.getElementById('cinfo').textContent='no candidates survived the cascade';tab('F');}
 </script></body></html>
 """

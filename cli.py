@@ -1130,7 +1130,9 @@ def write_outputs(res: LocateResult, args, T0: float, extra: dict | None = None)
                                                    if truth and d["cell_id"] == int(spec.cell_ids(*true_ij))), None))
         plotly_js = root / "plotly.min.js"
         plot.write_viewer(run_dir / "viewer.html", run_id, x, fs, prior.start_s, events, fits, cands,
-                          "../plotly.min.js", vc, sp, c)
+                          "../plotly.min.js", vc, sp, c,
+                          plot.map_layers(surv, ts, ncand, int(vc.get("map_max_cells", 20000)), 2.0,
+                                          str(vc.get("map_style", "open-street-map"))))
         if not plotly_js.exists():
             print(f"warning: {plotly_js} missing; viewer.html needs it (pinned plotly.js {vc.get('plotly_version')})",
                   file=sys.stderr)

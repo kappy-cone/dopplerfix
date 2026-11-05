@@ -103,10 +103,35 @@ def test_viewer_references_shared_plotly_and_is_small(tmp_path):
                          "geom": {"v_mps": 60.0, "d_m": 500.0, "t0_rel_s": 28.5, "t_rx_rel_s": 30.0, "alt_m": 2100.0,
                                   "f_pre_hz": 142.0, "f_post_hz": 104.0, "max_roc_hz_s": 2.1}}]}]
     out = tmp_path / "viewer.html"
-    plot.write_viewer(out, "run", x, 8000, 1.7e9, [ev], [fit], cand)
+    mp = {"style": "open-street-map", "n_cells_total": 1, "cells": {"lat": [40.0], "lon": [-105.0], "score": [0.6],
+                                                                  "rank": [1]}, "tracks": []}
+    plot.write_viewer(out, "run", x, 8000, 1.7e9, [ev], [fit], cand, map_data=mp)
     html = out.read_text()
+    assert '"map":{"style":"open-street-map"' in html and "scattermap" in html and "openstreetmap.org/copyright" in html
     assert '<script src="../plotly.min.js"></script>' in html
     for key in ("Compare candidates", "Event fit", "Take snapshot", "BEST = midpoint", "f_pre", "max RoC", "live score"):
         assert key in html
     assert "NaN" not in html.split("const D = ")[1].split(";\n")[0]       # strict JSON payload
     assert len(html) < 300_000
+
+
+def test_map_layers_carry_cells_and_assigned_tracks_only():
+    from types import SimpleNamespace
+
+    from doppler import geo
+
+    K, T = 3, 40
+    lat = np.linspace(40.0, 40.02, T)
+    xyz = np.stack([geo.geodetic_to_ecef(lat, np.full(T, -105.0 + 0.01 * k), np.full(T, 2000.0)) for k in range(K)])
+    xyz[2, 30:] = np.nan                                       # gaps are dropped, not drawn as NaN
+    ts = SimpleNamespace(dt_s=0.5, xyz=xyz, icao24=np.array(["aaa", "bbb", "ccc"]), callsign=np.array(["A", "B", "C"]),
+                         valid=lambda: np.isfinite(xyz[..., 0]))
+    surv = [{"rank": r, "lat": 40.0, "lon": -105.0, "est_lat": 40.001 * r, "est_lon": -105.0, "score": 0.5 * r,
+             "tracks": tr} for r, tr in ((1, [0, 2]), (2, [0, -1]), (3, [1, 1]))]
+    m = plot.map_layers(surv, ts, n_candidates=2, max_cells=2, step_s=2.0)
+    assert m["style"] == "open-street-map" and m["n_cells_total"] == 3
+    assert m["cells"]["rank"] == [1, 2] and m["cells"]["lat"] == [40.001, 80.002]   # refined location (est_lat)
+    assert m["cells"]["score"] == [0.5, 1.0] and len(m["cells"]["lat"]) == 2
+    assert [t["icao24"] for t in m["tracks"]] == ["aaa", "ccc"]             # track 1 belongs only to rank 3
+    assert len(m["tracks"][0]["lat"]) == 10 and len(m["tracks"][1]["lat"]) == 8   # every 4th sample of valid ones
+    assert not any(np.isnan(m["tracks"][1]["lat"]))
