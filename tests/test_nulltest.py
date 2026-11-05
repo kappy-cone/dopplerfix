@@ -95,6 +95,8 @@ def test_summary_when_the_real_search_has_no_candidate():
     s = nt.summarize(_best(0, 0, n_candidates=0), [(0.5, 300.0, _best(1, 2.0))])
     assert s["explained_gap"] is None and s["n_shifted_not_worse"] == 1
     assert nt.summarize(_best(2, 1.0), [])["best_shifted"] is None
+    # neither search found a candidate: no shift counts as "not worse"
+    assert nt.summarize(_best(0, 0, n_candidates=0), [(0.5, 300.0, _best(0, 0, n_candidates=0))])["n_shifted_not_worse"] == 0
 
 
 @pytest.mark.heavy                 # ~20 s locally (four cascade + scoring runs): after merge, not in the gate

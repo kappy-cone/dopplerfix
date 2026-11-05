@@ -143,7 +143,7 @@ def summarize(real: SearchBest, shifted: Sequence[tuple[float, float, SearchBest
     ``explained_gap`` = events explained by the real rank 1 minus by the best shifted one (> 0: the real timing
     explains more). ``best_shifted_over_real`` (score ratio) and ``score_gap`` (shifted − real) are given only
     when both explain the same number of events and, for the ratio, the real score is positive.
-    ``n_shifted_not_worse`` counts shifts whose rank 1 ranks at or above the real one.
+    ``n_shifted_not_worse`` counts shifts that have a candidate whose rank 1 ranks at or above the real one.
     """
     rows = [{"shift_frac": float(f), "shift_s": float(s), **b.as_dict()} for f, s, b in shifted]
     out = {"shifts_frac": [float(f) for f, _, _ in shifted], "real": real.as_dict(), "shifted": rows,
@@ -154,7 +154,7 @@ def summarize(real: SearchBest, shifted: Sequence[tuple[float, float, SearchBest
     j = min(range(len(shifted)), key=lambda i: shifted[i][2].rank_key)
     b = shifted[j][2]
     out["best_shifted"] = j
-    out["n_shifted_not_worse"] = int(sum(s.rank_key <= real.rank_key for _, _, s in shifted))
+    out["n_shifted_not_worse"] = int(sum(bool(s.n_candidates) and s.rank_key <= real.rank_key for _, _, s in shifted))
     if real.n_explained is not None and b.n_explained is not None:
         out["explained_gap"] = int(real.n_explained - b.n_explained)
         if out["explained_gap"] == 0:
