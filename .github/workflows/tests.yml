@@ -32,12 +32,15 @@ jobs:
     strategy:
       fail-fast: false                 # a failure in one shard should not hide the other's result
       matrix:
-        # The two -k expressions are complements, so every fast test runs in exactly one shard. The
-        # locked-scoring cases are ~70 % of the fast suite's time. If that test is renamed, the "scoring"
-        # shard selects nothing and pytest exits 5 (fails), so the split cannot silently go stale.
+        # The -k expressions partition the fast suite, so every fast test runs in exactly one shard. The
+        # four locked-scoring cases are ~70 % of its time (115, 85, 83, 47 s on the runner), split into two
+        # balanced pairs by parametrize id. If the test or its ids change, "scoring-a" selects nothing and
+        # pytest exits 5 (fails), so the split cannot silently go stale.
         include:
-          - shard: scoring
-            select: "test_true_cell_ranks_first_after_locked_scoring"
+          - shard: scoring-a
+            select: "test_true_cell_ranks_first_after_locked_scoring and (1-60.0 or 4-180.0)"
+          - shard: scoring-b
+            select: "test_true_cell_ranks_first_after_locked_scoring and not (1-60.0 or 4-180.0)"
           - shard: rest
             select: "not test_true_cell_ranks_first_after_locked_scoring"
     steps:

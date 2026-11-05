@@ -86,8 +86,9 @@ conventions keep that safe. They add to CLAUDE.md (methodology, rules) and the p
 ## 7. CI policy
 - **What CI checks** (`.github/workflows/tests.yml`):
   - the fast suite (`pytest -m "not slow"`) on every pull request and every push to `main`, on a pinned
-    runner image and Python 3.12 with the pinned `requirements.txt`. It runs in two parallel shards (the
-    locked-scoring tests, and everything else); the target is under about 5 minutes wall-clock per run;
+    runner image and Python 3.12 with the pinned `requirements.txt`. It runs in three parallel shards (two
+    for the locked-scoring tests, one for everything else); the target is under about 5 minutes
+    wall-clock per run;
   - nothing on changes that touch only documentation (`*.md`, `reports/`, `docs/`, `doppler.txt`);
   - the slow suite (`pytest -m slow`) only when started by hand: Actions tab → tests → Run workflow, or
     `gh workflow run tests.yml --ref <branch>`. Run it there, or locally, before asking for a merge (§2).
@@ -99,7 +100,7 @@ conventions keep that safe. They add to CLAUDE.md (methodology, rules) and the p
   its own reason. A missing geoid-grid warning is not a failure (the test skips), but say so in the PR.
 - **Branch protection stays off** until CI has run on about 10 real PRs without a false alarm. Until then a
   red run is read by a person, and the user decides whether it blocks. Record false alarms in the PR they
-  happened on. When protection is turned on, make the two `fast (…)` checks required; because docs-only PRs
+  happened on. When protection is turned on, make the three `fast (…)` checks required; because docs-only PRs
   skip the workflow, either drop `paths-ignore` then or add a no-op job with the same check names.
 - **Keep it cheap:** if the fast suite grows past about 5 minutes, find the slow tests in the run log's
   `--durations` table and fix the cause first; another shard or a move to the slow suite is a last resort.
