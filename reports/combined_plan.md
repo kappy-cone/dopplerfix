@@ -1113,5 +1113,5 @@ risk. The detection thresholds themselves are calibrated only on milestone 4.5 f
   does not drop, and the answer rate is reported? **Approved.** It is an acceptance test, not a threshold:
   it tunes nothing.
 - **U19 (detection item):** add 8.2 (algorithmic detection improvements, measured on recall and false
-  events; thresholds untouched until 4.5)? It changes methodology step 2 (event detection). Recommend yes:
+  events; thresholds untouched until 4.5)? It changes methodology step 2 (event detection). **Approved:**
   detection caps every later gain.
