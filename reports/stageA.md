@@ -1,7 +1,9 @@
 # Stage A baseline (P0.6), session 5
 
 **Run.** `cli.py ablate --plan stageA` on scenario C (60 s, events at 15/45 s), on the user's compute machine, `--jobs 8`, 900 s cap per run. Raw rows are in `outputs/ablation/stageA/rows.jsonl`
-(gitignored, 650 rows; per-config table in `summary.md`, the run log in `run.log`).
+(gitignored, 650 rows; per-config table in `summary.md`, the run log in `run.log`). A compressed copy for review
+is committed as `reports/data/stageA_rows.jsonl.gz`, with `reports/data/stageA_detection.json` (per-unit truth and
+detected event counts from the kept files, so the §8.1 detection measures can be recomputed without them).
 - V0 and V1: commit 7ea5883, clean tree, all 275 units (all-on × 50, 9 LOO configs × 20, clean × 5, the
   skeptics' 4 experiments × 10).
 - V0-asdesigned and V1-asdesigned: tag `variants-asdesigned` (worktree `../qgis-asdesigned`), all-on seeds
@@ -11,8 +13,9 @@
   `abstained` / `survival:none`, the same row the in-process arms write. The as-designed rows record only the
   tag, not the driver commit, and `manifest.json` describes only that last 5-unit invocation.
 
-Wall time: about 1 h 40 min in total (V0/V1 pass about 69 min, as-designed pass about 31 min). This
-machine is about 2× the Mac's per-core speed; the first two pilot units reproduced the Mac's results exactly.
+Wall time: about 1 h 40 min in total (V0/V1 pass about 69 min, as-designed pass about 31 min). The
+compute machine is about 2× the laptop's per-core speed; the first two pilot units reproduced the laptop's
+results exactly.
 
 ## Outcomes, all-on C (n = 50 paired seeds)
 
@@ -206,3 +209,61 @@ every config against all-on, is in `summary.md`.
   12 / 27). P1.1 must raise precision without lowering rank-1 accuracy.
 - Detection (§8.2, U19) matters more than §8.0 estimated: 20 / 50 all-on runs lose an event before the
   cascade, and those runs account for 8 of V1's 13 discrimination failures.
+
+## Session 5, step 1b: where V1's time goes (profile of `score.rank_cells`)
+
+cProfile of four V1 units rebuilt from their seeds: the two all-on timeouts (seeds 11 and 23), the
+69,348-hypothesis clip (all-on 18) and the slowest finished unit (loo:source 6). Read-only; all four ran to
+completion under the profiler (1,181, 1,231, 882 and 926 s).
+
+| share of run time | all-on 11 | all-on 23 | all-on 18 | loo:source 6 |
+|---|---|---|---|---|
+| hypotheses scored | 78,814 | 65,168 | 69,348 | 51,936 |
+| `rank_cells` (all scoring) | 99 % | 97 % | 99 % | 96 % |
+| centre scoring (`score_hypothesis`) | 91 % | 90 % | 90 % | 88 % |
+| of which the Δt refinement (`minimize_scalar`) | 75 % | 74 % | 74 % | 72 % |
+| in-cell refinement (500 cells) | 7 % | 7 % | 8 % | 8 % |
+| `modeled_ratio` | 75 % | 74 % | 74 % | 73 % |
+| `TrackSet.sample` | 49 % | 48 % | 48 % | 48 % |
+| cascade (CPA + offset + silence) | 1 % | 3 % | 1 % | 4 % |
+
+- The time is per-call overhead, not arithmetic: each hypothesis' bounded Δt refinement calls `_hyp_cost` about
+  18 times, one Δt at a time, on ~60-point arrays, and every call runs 6 track interpolations per event.
+- **Identical-result speed-up (adopted, its own commit):** a direct-row path in `TrackSet.sample` for a single
+  track, and `np.maximum`/`np.minimum` and `sqrt(Σx²)` in `modeled_ratio` in place of `np.clip` and
+  `np.linalg.norm` (bit-identical here). Every Stage A field reproduces on 10 rebuilt units × {V0, V1} (all-on
+  0–5 and 18, clean 0, loo:path 1, loo:adsb 4). V1 is 10–14 % faster on heavy units (all-on 18: 702 → 621 s).
+  That is not enough to clear the two all-on timeouts.
+- **Not done, for the user to decide:**
+  - Result-changing options stay measured arms: top-K hypotheses per cell, or a lower hypothesis cap.
+  - A larger identical-result option exists: refine the Δt of a cell's hypotheses in lockstep, so each event and
+    track is evaluated once per step for all of them. It would need the same bit-for-bit check, and it is more
+    work.
+
+## Session 5, step 2: P1.1 + P1.4 arms (V1c, V0c), status before the U18 result
+
+Implemented as comparison arms only; V0 and V1 rows are unchanged (the same 10 rebuilt units reproduce every
+result field; only `config_sha256` differs, because `config.yaml` gained the new keys). The knobs and the
+implementation choices are in `reports/apriori_registry.md` (Phase 1), registered before any measurement.
+
+**Pre-registered P1.1 tests.** White noise (Wilks, 200 Monte Carlo trials, ADS-B budget off because the
+simulation has no ADS-B error): 2Δnll(truth − MLE) over (E, N, Δt) passes the χ²₃ KS test (a 100-trial run gave
+mean 3.20, KS p 0.86). **AR(1) ρ₁ = 0.6: missed.** Mean 2Δnll is 3.71 against 3 ± 20 % (n = 100), so the
+effective-N correction under-corrects by about a quarter (without it the mean would be about 12). The test is
+marked xfail with that value; nothing was tuned.
+
+**Findings from building it** (no knob moved):
+- The model-free ρ₁ / σ_white estimator is contaminated by the curve's own curvature when ridge noise is small
+  (0.05 Hz): on white noise κ reached 3.6 for the event with the sharper CPA. At a realistic 0.3 Hz (Stage A
+  σ_ref values are 0.2–0.4 Hz) it is close (κ ≈ 1.2). A 3-MAD trimmed version did not help.
+- With the a-priori ADS-B budget, the latency term (ḟ × 0.5 s) dominates σ_model near CPA, where the curve is
+  steepest. Treating a per-track systematic as white per-point variance down-weights the most informative part
+  of each pass. This is the plan's P1.1 form ("later from P3.1's covariance"), measured as written.
+- A non-robust self-referential σ_e (plain RMS) let one harmonic-hop point widen every point's density; σ_e is
+  the robust (MAD) scale instead, so the mixture bound holds.
+- V1c costs about 1.15–1.3× V1 per run (all-on 18: 802 vs 615 s), so it may time out slightly more often.
+
+**U18 run: a screen, not the decision run.** CONTRIBUTING §4 (added by another session while this ran) says
+decision runs come only from a clean, committed `main` or a tag. The U18 run here uses commit 7057c08 (local tag
+`s5-u18-screen`), which is this session's branch before review, so its rows are a screen. After review and
+merge, the decision run is the same two commands from `main`. Its results will be added here when it finishes.
