@@ -369,3 +369,11 @@ diagnostics:                 # report-only diagnostics (doppler/nulltest.py, dop
   null_shifts_frac: [0.25, 0.5, 0.75]   # shifts as fractions of the clip, each event wrapped as a unit
   commit_result: false       # SHA-256 of the top candidates, recorded before anything truth-derived is reported
   commit_top_k: 5            # candidates (by rank) the commitment covers
+
+adsblol:                     # adsb.lol daily archives -> tracks (cli.py adsblol; docs/adsblol_ingest.md)
+  sources: [adsb_icao, adsb_icao_nt, adsr_icao, tisb_icao, mlat]   # PROVISIONAL: position sources kept
+  keep_unknown_source: true  # points without a source field (files before 2022)
+  keep_anonymous: true       # non-ICAO addresses ("~..."): kept for the silence filter, class unknown
+  keep_stale: false          # points readsb flags stale (no position in the 20 s before)
+  margin_m: 30000.0          # crop margin around the region bbox: well over the largest audible slant (6 km)
+  pad_s: 300.0               # crop margin around the time window

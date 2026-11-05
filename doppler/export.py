@@ -419,3 +419,63 @@ def verify_result(run_dir: Path, expected_sha256: str | None = None) -> dict:
         raise KeyError(f"{run_dir / 'run.json'} has no result_commitment (run locate with --commit-result)")
     recs, n = commitment_records_from_gpkg(run_dir / "results.gpkg")
     return verify(recs, n, rj["result_commitment"], expected_sha256)
+
+
+# ---------------------------------------------------------------------------
+# adsb.lol daily archives (doppler/adsblol.py parses; this only streams). Never unpacked to disk.
+# ---------------------------------------------------------------------------
+class _ChainedParts:
+    """Read-only file object over split archive parts (``.tar.aa``, ``.tar.ab``, ...) in order, like ``cat``."""
+
+    def __init__(self, paths):
+        self._paths = [Path(p) for p in paths]
+        self._i, self._f = 0, None
+
+    def read(self, n: int = -1) -> bytes:
+        out = b""
+        while n < 0 or len(out) < n:
+            if self._f is None:
+                if self._i >= len(self._paths):
+                    break
+                self._f = open(self._paths[self._i], "rb")
+                self._i += 1
+            chunk = self._f.read(-1 if n < 0 else n - len(out))
+            if not chunk:
+                self._f.close()
+                self._f = None
+                continue
+            out += chunk
+        return out
+
+    def close(self) -> None:
+        if self._f is not None:
+            self._f.close()
+
+
+def iter_archive_json(parts, name_filter: str = "trace") -> "Iterator[dict]":
+    """Decoded JSON of every archive member whose name contains ``name_filter``, streamed in one pass.
+
+    Members may be gzipped whatever their extension (readsb writes gzip-compressed JSON), so the gzip magic
+    bytes decide. Unreadable members are skipped and counted in the module logger.
+    """
+    import gzip
+    import logging
+    import tarfile
+
+    log = logging.getLogger(__name__)
+    src = _ChainedParts(sorted(parts))
+    bad = 0
+    try:
+        with tarfile.open(fileobj=src, mode="r|*") as tf:
+            for m in tf:
+                if not m.isfile() or name_filter not in m.name:
+                    continue
+                raw = tf.extractfile(m).read()
+                try:
+                    yield json.loads(gzip.decompress(raw) if raw[:2] == b"\x1f\x8b" else raw)
+                except (OSError, ValueError):
+                    bad += 1
+    finally:
+        src.close()
+        if bad:
+            log.warning("adsb.lol archive: %d unreadable members skipped", bad)
