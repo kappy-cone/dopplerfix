@@ -7,15 +7,16 @@ conventions keep that safe. They add to CLAUDE.md (methodology, rules) and the p
 ## 1. Branches and merges
 - **One branch per session or task.** Name it `s<session>-<topic>`, e.g. `s6-measurement`, `s6-p11-likelihood`.
   Start from an up-to-date `main` (`git pull --rebase`).
-- **`main` changes only through a pull request** that passes CI (`.github/workflows/tests.yml`, fast tests)
-  and has been reviewed (§3). Squash-merge, so `main` keeps one commit per reviewed step.
+- **`main` changes only through a pull request** whose head commit passed the CI gate (§7) and that has been
+  reviewed (§3). Squash-merge, so `main` keeps one commit per reviewed step.
 - **Rebase the branch on `main` before opening or updating a PR.** Keep branches short-lived: merge within
   a day or two.
 - **The user is the integrator.** A session opens PRs. It merges only when the user says so.
 
 ## 2. Commits
-- **One commit per logical step, not per edit.** Each commit passes the fast tests
-  (`pytest -m "not slow"`). Run the slow tests before asking for a merge.
+- **One commit per logical step, not per edit.** Each commit passes the gate tests locally
+  (`pytest -m "not slow and not heavy" -n 4`, about 30 s). Run the heavy and slow tests
+  (`pytest -m "heavy or slow" -n 4`) before asking for a merge when the change touches what they cover.
 - **Commit messages say:**
   - what changed;
   - why (the plan item, e.g. "plan §8.1", "P1.1");
@@ -24,12 +25,8 @@ conventions keep that safe. They add to CLAUDE.md (methodology, rules) and the p
   session can review it.
 - **Never commit credentials or local config** (OpenSky settings, `.env`, tokens). Check `git status` and
   the diff before each push.
-- **No personal or machine details in any committed file** (the repo is public). That means no hardware specs
-  (CPU, cores, RAM, GPU, disk), hostnames, OS usernames, home-directory or temp paths, email addresses or names.
-  Use neutral terms ("the compute machine", "the laptop") and placeholders (`<repo>`, `<scratch>`, relative
-  paths). Before each push, scan the staged diff, e.g.
-  `git diff --cached | grep -inE "/Users/|/home/|/private/tmp|@[a-z0-9.-]+\.(edu|com)|cores|threads|[0-9]+ ?GB"`,
-  and check every hit. This applies to text a subagent or another session produced, too.
+- **No personal or machine details in any committed file or commit message** (the repo is public). This is
+  a standing writing rule in CLAUDE.md Conventions, not a separate step before each push.
 
 ## 3. Review
 - **Review at the plan's checkpoints, not on every push.** For example, after each numbered step of a session
@@ -84,25 +81,42 @@ conventions keep that safe. They add to CLAUDE.md (methodology, rules) and the p
 - Either can write code, on its own branch.
 
 ## 7. CI policy
-- **What CI checks** (`.github/workflows/tests.yml`):
-  - the fast suite (`pytest -m "not slow"`) on every pull request and every push to `main`, on a pinned
-    runner image and Python 3.12 with the pinned `requirements.txt`. It runs in three parallel shards (two
-    for the locked-scoring tests, one for everything else); the target is under about 5 minutes
-    wall-clock per run;
-  - nothing on changes that touch only documentation (`*.md`, `reports/`, `docs/`, `doppler.txt`);
-  - the slow suite (`pytest -m slow`) only when started by hand: Actions tab → tests → Run workflow, or
-    `gh workflow run tests.yml --ref <branch>`. Run it there, or locally, before asking for a merge (§2).
-- **What CI does not check:** decision runs and ablations, QGIS (the template test only reads the
-  project file), real data, other Python versions, and the rules a reviewer checks by hand (§3).
-- **What blocks a merge:** a red fast-suite run on the PR's latest commit. A failure is fixed on the branch,
-  or shown to be a false alarm (runner or network trouble, not the code) and re-run. It is never skipped by
-  marking a test slow or `xfail` just to get green: moving a test between suites is a reviewed change with
-  its own reason. A missing geoid-grid warning is not a failure (the test skips), but say so in the PR.
-  If the warning appears although the cache was hit, the cached folder is bad. Bump the cache key
-  (`proj-grids-v1` → `v2`, in `.github/actions/setup-env/action.yml`) so the grids are fetched again.
+CI is built for fast merges: a session pushes, and its checks are back in about 30 s.
+- **The gate** (job `gate` in `.github/workflows/tests.yml`):
+  - **When:** runs on every push to every branch. A PR therefore opens with its head commit already checked;
+    opening it does not start another run.
+  - **What:** the fast suite without the `heavy` tests (`pytest -m "not slow and not heavy"`). It is split into
+    6 parallel jobs `gate (0/6)` … `gate (5/6)` by a hash of each test id (`--shard I/N` in `tests/conftest.py`),
+    so every test runs in exactly one job and new tests need no bookkeeping. Each job runs 4 xdist workers, on
+    a pinned runner image and Python 3.12, with the installed packages cached on `requirements.txt`.
+  - **Target:** about 30 s from push to result.
+  - **Superseded runs:** a newer push to the same branch cancels the older run.
+  - **Docs-only pushes** (`*.md`, `reports/`, `docs/`, `doppler.txt`) skip CI.
+- **After merge** (job `after-merge`):
+  - **When:** runs on every push to `main`, and by hand on any branch (Actions tab → tests → Run workflow,
+    or `gh workflow run tests.yml --ref <branch>`).
+  - **What:** the `heavy` tests (the locked-scoring true-cell checks) plus the slow suite, on 4 workers.
+  - **Duration:** about 5–10 min. Nobody waits on it.
+- **What blocks a merge:**
+  - **A red gate on the PR's head commit.** A failure is fixed on the branch, or shown to be a false alarm
+    (runner or network trouble, not the code) and re-run.
+  - **A red after-merge run on `main`.** It blocks the *next* merge until it is fixed or reverted. Fix-forward
+    is fine when it is quick; otherwise revert the merge. Whoever merged last owns the fix.
+- **What CI does not check:** decision runs and ablations, QGIS (the template test only reads the project
+  file), real data, other Python versions, and the rules a reviewer checks by hand (§3).
+- **Keeping the gate at 30 s:**
+  - A fast test that takes more than about 2 s on the runner gets either made faster or marked
+    `@pytest.mark.heavy`, which moves it to the after-merge run. Find candidates in the gate log's
+    `--durations` table.
+  - Marking a test `heavy` is a reviewed change with its reason. A test is never marked `slow`, `heavy` or
+    `xfail` just to turn a red gate green.
+- **Geoid grids:** a missing-grid warning is not a failure (the test skips), but say so in the PR. If the
+  warning appears although the cache was hit, the cached folder is bad. Bump the cache key (`proj-grids-v1` →
+  `v2`, in `.github/actions/setup-env/action.yml`) so the grids are fetched again. A changed
+  `requirements.txt` reinstalls the cached packages once (about 30 s extra on that run).
 - **Branch protection stays off** until CI has run on about 10 real PRs without a false alarm. Until then a
   red run is read by a person, and the user decides whether it blocks. Record false alarms in the PR they
-  happened on. When protection is turned on, make the three `fast (…)` checks required; because docs-only PRs
-  skip the workflow, either drop `paths-ignore` then or add a no-op job with the same check names.
-- **Keep it cheap:** if the fast suite grows past about 5 minutes, find the slow tests in the run log's
-  `--durations` table and fix the cause first; another shard or a move to the slow suite is a last resort.
+  happened on. When protection is turned on:
+  - make the six `gate (i/6)` checks required;
+  - docs-only commits skip the workflow, so either drop `paths-ignore` then, or add no-op jobs with the same
+    names for docs-only changes.

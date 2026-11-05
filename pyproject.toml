@@ -9,5 +9,6 @@ testpaths = ["tests"]
 pythonpath = ["."]
 markers = [
     "slow: end-to-end tests that synthesize minutes of audio (deselect with -m 'not slow')",
+    "heavy: fast-suite tests too slow for the ~30 s merge gate; CI runs them on main after merge (CONTRIBUTING §7)",
 ]
 addopts = "-ra"
