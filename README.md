@@ -33,11 +33,11 @@ One flyover already constrains the microphone a lot:
 
 For a straight, level pass at speed *v*, closest distance *d* and closest-approach time *t₀*:
 
-$$
+```math
 r(t)=\sqrt{d^2+v^2\,(t-t_0)^2},\qquad
 f(t)=f_0\,\frac{c}{c+\dot r(t)},\qquad
 c\approx 331.3+0.606\,T_{^\circ\mathrm{C}}\ \mathrm{m/s}
-$$
+```
 
 - **Narrowing it down:** one event leaves a locus of possible positions. Two events from different aircraft, their
   measured time offset, and the *absence* of other flyovers that should have been heard (the silence constraint)
