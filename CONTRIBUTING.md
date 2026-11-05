@@ -98,6 +98,8 @@ conventions keep that safe. They add to CLAUDE.md (methodology, rules) and the p
   or shown to be a false alarm (runner or network trouble, not the code) and re-run. It is never skipped by
   marking a test slow or `xfail` just to get green: moving a test between suites is a reviewed change with
   its own reason. A missing geoid-grid warning is not a failure (the test skips), but say so in the PR.
+  If the warning appears although the cache was hit, the cached folder is bad. Bump the cache key
+  (`proj-grids-v1` → `v2`, in `.github/actions/setup-env/action.yml`) so the grids are fetched again.
 - **Branch protection stays off** until CI has run on about 10 real PRs without a false alarm. Until then a
   red run is read by a person, and the user decides whether it blocks. Record false alarms in the PR they
   happened on. When protection is turned on, make the three `fast (…)` checks required; because docs-only PRs
