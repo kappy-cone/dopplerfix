@@ -73,6 +73,6 @@ conventions keep that safe. They add to CLAUDE.md (methodology, rules) and the p
   it, and never reinterprets one recorded by another session.
 
 ## 6. Machine roles
-- **The PC** (Ryzen 7 9800X3D, 8 cores) runs ablations and other compute-heavy work.
-- **The Mac** handles analysis, docs, review sessions and QGIS.
+- **The compute machine** runs ablations and other compute-heavy work.
+- **The laptop** handles analysis, docs, review sessions and QGIS.
 - Either can write code, on its own branch.
