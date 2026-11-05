@@ -1,31 +1,32 @@
-# Shared setup for .github/workflows/tests.yml: Python, a cached virtualenv with requirements.txt, and the
+# Shared setup for .github/workflows/tests.yml: Python, the requirements.txt packages from a cache, and the
 # geoid grids in data/proj.
 name: setup-env
-description: Install Python, restore (or build) the cached .venv, and restore (or fetch) the geoid grids.
+description: Install Python, restore (or install) the cached packages, and restore (or fetch) the geoid grids.
 runs:
   using: composite
   steps:
     - uses: actions/setup-python@v7
       id: py
       with:
-        python-version: "3.12"            # the venv's version (requirements.txt header)
-    # The whole virtualenv is cached, keyed on the exact Python and requirements.txt. A hit skips pip
-    # entirely (about 20 s saved); a miss builds it once and saves it for the next runs.
-    - name: Restore virtualenv
-      id: venv
+        python-version: "3.12"            # the project's Python (requirements.txt header); any 3.12 patch
+    # The installed packages (pip --target) are cached, keyed on Python 3.12 and requirements.txt. Not a
+    # venv: runner images ship different 3.12 patch releases during rollouts, and a venv is tied to the
+    # exact interpreter, while cp312 wheels work on any 3.12. A hit skips pip (about 20 s); a miss installs
+    # once and saves for the next runs. Commands use `python -m ...`, since console scripts in .deps/bin
+    # are not on PATH.
+    - name: Restore packages
+      id: deps
       uses: actions/cache@v6
       with:
-        path: .venv
-        key: venv-${{ runner.os }}-${{ runner.arch }}-py${{ steps.py.outputs.python-version }}-${{ hashFiles('requirements.txt') }}
-    - name: Build virtualenv
-      if: steps.venv.outputs.cache-hit != 'true'
+        path: .deps
+        key: deps-${{ runner.os }}-${{ runner.arch }}-py3.12-${{ hashFiles('requirements.txt') }}
+    - name: Install packages
+      if: steps.deps.outputs.cache-hit != 'true'
       shell: bash
-      run: |
-        python -m venv .venv
-        .venv/bin/pip install --disable-pip-version-check -q -r requirements.txt
-    - name: Use virtualenv
+      run: python -m pip install --disable-pip-version-check -q --target .deps -r requirements.txt
+    - name: Use packages
       shell: bash
-      run: echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+      run: echo "PYTHONPATH=$PWD/.deps" >> "$GITHUB_ENV"
     # Geoid grids (CLAUDE.md Known pitfalls). tests/test_geo.py skips its grid test without them, so a
     # failed fetch must not fail CI, but it must be visible, and an empty folder must never be cached.
     - name: Restore geoid grids
@@ -40,7 +41,7 @@ runs:
       run: |
         mkdir -p data/proj
         for f in us_noaa_g2018u0 us_nga_egm96_15; do
-          pyproj sync --file "$f" --target-directory data/proj \
+          python -m pyproj sync --file "$f" --target-directory data/proj \
             || echo "::warning::pyproj sync failed for $f; the geoid grid test will skip"
         done
     - name: Check geoid grids
