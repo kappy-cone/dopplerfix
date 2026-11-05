@@ -1,7 +1,7 @@
 # U19 detection: what the literature and the step-2 screen say to try next
 
-Input for the U19 session (plan §8.2). It is tailored to the step-2 screen in `reports/u19.md` (branch
-`s6-u19-detection`, commit 6d436e1) and to the code on that branch. It proposes arms and diagnostics. It
+Input for the U19 session (plan §8.2). It is tailored to the step-2 screen in `reports/u19.md` (main, 49cbd20)
+and to the detector and ridge code at that commit. It proposes arms and diagnostics. It
 changes no code, threshold or decision; each arm below would be registered and screened under U19's own
 rules.
 
