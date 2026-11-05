@@ -102,3 +102,66 @@ def test_absolute_fit_status():
     st = score.absolute_fit_status([0.2, np.nan], [0.1, 0.1], p)
     assert not st["inconsistent"] and st["rms_over_ref"][1] is None
     assert score.absolute_fit_status([0.5, 0.1], [0.1, 0.1], p)["inconsistent"]
+
+
+def test_detection_class_sits_beside_the_taxonomy():
+    full = {"n_truth_events": 2, "truth_events_detected": 2, "failure": "bias"}
+    miss = {"n_truth_events": 2, "truth_events_detected": 1, "failure": "discrimination"}
+    assert ev.detection_complete(full) and ev.detection_class(full) is None
+    assert ev.detection_complete(miss) is False and ev.detection_class(miss) == "detection"
+    assert ev.detection_complete({"failure": "bias"}) is None            # counts unknown: not classified
+    assert miss["failure"] == "discrimination"                           # the pre-registered class is untouched
+    assert ev.reorder_rule([full, miss]) == ev.reorder_rule([{"failure": "bias"}, {"failure": "discrimination"}])
+
+
+def test_rank1_accuracy_ignores_status():
+    assert ev.rank1_ok({"status": "inconsistent", "rank1_error_m": 70.0, "rank1_assignment_correct": True}, P)
+    assert ev.rank1_ok({"status": "ambiguous", "rank1_error_m": 185.0, "rank1_assignment_correct": None}, P)
+    assert not ev.rank1_ok({"status": "unique", "rank1_error_m": 150.0, "rank1_assignment_correct": False}, P)
+    assert not ev.rank1_ok({"status": "unique", "rank1_error_m": 250.0, "rank1_assignment_correct": True}, P)
+    assert not ev.rank1_ok({"status": "none", "rank1_error_m": None}, P)          # timeouts, no answer
+
+
+def test_delta_cost_only_compares_like_with_like():
+    row = {"true_assignment_score": 3.0, "true_assignment_n_unmatched": 0, "rank1_score": 2.5, "rank1_n_unmatched": 0}
+    assert ev.delta_cost(row) == pytest.approx(0.5)
+    # Stage A seed 1: the true cell's best hypothesis left an event unmatched (score 0.98 vs rank 1's 8.34)
+    assert ev.delta_cost({**row, "true_assignment_score": 0.98, "true_assignment_n_unmatched": 1,
+                          "rank1_score": 8.34}) is None
+    assert ev.delta_cost({"rank1_score": 2.5, "true_cell_score": 1.0, "rank1_n_unmatched": 0}) is None  # Stage A rows
+
+
+def test_paired_tests():
+    from scipy.stats import wilcoxon
+
+    a = [1.0, 5.0, 2.0, None, 7.0, 3.0, 9.0]
+    b = [0.0, 1.0, 2.0, 4.0, 1.0, 1.0, None]
+    t = ev.paired_wilcoxon(a, b)
+    d = [1.0, 4.0, 0.0, 6.0, 2.0]
+    assert t["n"] == 5 and t["n_dropped"] == 2 and t["n_nonzero"] == 4 and t["median_diff"] == 2.0
+    assert t["p"] == pytest.approx(wilcoxon(d, zero_method="wilcox").pvalue)
+    assert np.isnan(ev.paired_wilcoxon([1.0, 2.0], [1.0, 2.0])["p"])               # no difference at all
+    s = ev.paired_sign([True] * 6 + [False] * 4, [False] * 6 + [False] * 4)
+    assert (s["a_only"], s["b_only"]) == (6, 0) and s["p"] == pytest.approx(0.03125)
+    assert np.isnan(ev.paired_sign([True, False], [True, False])["p"])
+
+
+def test_summary_reports_the_section_8_1_measures():
+    rows = [
+        {"outcome": "correct", "status": "unique", "rank1_error_m": 50.0, "rank1_assignment_correct": True,
+         "n_truth_events": 2, "truth_events_detected": 2},
+        {"outcome": "abstained", "status": "inconsistent", "rank1_error_m": 70.0, "rank1_assignment_correct": True,
+         "failure": None, "n_truth_events": 2, "truth_events_detected": 2},
+        {"outcome": "confident_wrong", "status": "unique", "rank1_error_m": 4000.0, "rank1_assignment_correct": False,
+         "failure": "discrimination", "n_truth_events": 2, "truth_events_detected": 1},
+        {"outcome": "abstained", "status": "none", "rank1_error_m": None, "failure": "survival:none",
+         "n_truth_events": 2, "truth_events_detected": 0},
+    ]
+    s = ev.summarize(rows, P)
+    assert s["answer_rate"]["k"] == 2 and s["rank1_accuracy"]["k"] == 2
+    assert s["detection"] == {"runs": 4, "truth_events": 8, "detected": 5, "runs_complete": 2, "recall": 5 / 8}
+    assert s["detection_failures"] == {"k": 2, "by_failure": {"discrimination": 1, "survival:none": 1}}
+    c = s["conditional_on_detection"]
+    assert c["n"] == 2 and c["correct"]["k"] == 1 and c["rank1_accuracy"]["k"] == 2
+    assert c["precision_unique"]["k"] == 1 and c["precision_unique"]["n"] == 1
+    assert s["failures"] == {"discrimination": 1, "survival:none": 1}              # taxonomy unchanged

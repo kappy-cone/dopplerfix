@@ -103,3 +103,106 @@ scoring is about 95 % of V1's time (profile `score.rank_cells` before numba or m
 - The fit-error census [S-F2] is in the rows (`per_event`) but not summarised here.
 - `manifest.json` is overwritten by each `ablate` invocation (it now describes the 5-unit relabel rerun);
   the rows carry their own commit.
+
+## Addendum (session 5): plan §8.1 measures, re-summarised from the same rows
+
+No re-run: `cli.py ablate --summarize` over the 650 Stage A rows, with the §8.1 measures added to
+`doppler/evaluate.py` and the summary (`summary.md`, second and third tables). The pre-registered taxonomy and
+re-ordering rule are unchanged.
+
+**Hand-check first.** Eight rows were recomputed independently from their kept `truth.json` and
+`events.parquet`: all-on 3, 1, 21, 10, 12 (V1), 13 (V0), clean 2, loo:path 6. They cover correct, bias,
+discrimination, confident-wrong, no events and one event missed. Event counts, the truth matching, extra
+events and per-event dv / dd / dt_rx all agree exactly. Two units (all-on seeds 1 and 3, V1) were also rebuilt
+from their seeds and re-run in process; every Stage A field of the row came back identical.
+
+**Detection counts for the other arms.** Timeout and no-event rows, and the as-designed arms, don't record
+detection. Their counts come from the kept files: 169 rows, and 0 disagreements where a row did record one.
+That is valid for the as-designed arms because detection is identical at the tag: `detect.py`, `ridge.py`,
+`fit.py`, `classify.py`, `audio.py`, `cli.run_events` and the detect / ridge / fit / classify config sections
+are unchanged between ea8fe0d and 7ea5883, and both arms analyse the same audio.
+
+### Detection: a quarter of all-on truth events are never detected
+
+| config (V1 rows) | truth events detected | runs with an event missed |
+|---|---|---|
+| clean | 10 / 10 | 0 / 5 |
+| all-on | **75 / 100** | **20 / 50** |
+| loo:levels | 38 / 40 | 2 / 20 |
+| loo:scene | 37 / 40 | 3 / 20 |
+| loo:source | 32 / 40 | 5 / 20 |
+| loo:geometry, sub:rpm | 29 / 40 | 9 / 20 |
+| loo:adsb, sub:cwind, sub:mic_height | 28 / 40 | 9–10 / 20 |
+| sub:reflection | 12 / 20 | 5 / 10 |
+| loo:path | 18 / 40 | 14 / 20 |
+| set:corridor_frac=1, sub:corridor, sub:twins | 19, 18, 17 / 20 | 1, 1, 2 / 10 |
+
+- §8.0 quotes all-on 19 / 20 from the 10-seed pathcheck. Stage A seeds 0–9 reproduce that exactly (also
+  loo:path 10 / 20, sub:cwind 17 / 20; sub:reflection gives 12 / 20 against 14 / 20, which may be the pathcheck
+  building scenarios without decoys). Seeds 10–49 give 56 / 80. Seeds 0–9 were the luckiest decade, so
+  detection caps accuracy harder than §8.0 says: **20 of 50 all-on runs start with a truth event missing.**
+- All arms share these counts (one detection per scenario).
+
+**The `detection` class beside the taxonomy** (all-on, the 20 runs with a miss, by their pre-registered class):
+- V1: survival:none 5, discrimination 8, bias 3, survival:grid 2, plus 1 correct and 1 abstained without a
+  failure class. So 8 of V1's 13 "discrimination" failures and both survival:none ones are runs where the
+  detector lost a truth event; the cascade or scoring never had a chance.
+- V0: survival:none 5, survival:offset 6, survival:grid 4, discrimination 3, bias 2.
+
+On the 30 fully detected all-on runs the rule still gives the written order (V1: survival:grid 6,
+discrimination 5, bias 4, timeout 2; V0: offset 9, bias 6, grid 6, discrimination 5). That is reported for
+information only; the pre-registered rule is applied to all runs, as before.
+
+### Accuracy ignoring status, answer rate, and conditional accuracy (all-on C)
+
+| arm | correct | rank-1 accuracy (status ignored) | answer rate (unique) | precision of unique | cond. n | cond. correct | cond. rank-1 acc | cond. precision |
+|---|---|---|---|---|---|---|---|---|
+| V0 | 2 | 3 | 13 | 2 / 13 | 30 | 2 | 3 | 2 / 8 |
+| V1 | 7 | **15** | 16 | 7 / 16 (44 %) | 30 | 6 | 13 | 6 / 12 |
+| V0 → V1 (zero survivors) | 5 | 7 | 17 | 5 / 17 | 30 | 5 | 7 | 5 / 12 |
+| V0 → V1 (absolute fit) | 7 | 14 | 20 | 7 / 20 | 30 | 6 | 13 | 6 / 13 |
+| V0-asdesigned | 2 | 3 | 23 | 2 / 23 | 30 | 2 | 3 | 2 / 15 |
+| V1-asdesigned | 12 | **15** | 27 | 12 / 27 (44 %) | 30 | 11 | 13 | 11 / 21 |
+
+(Rank-1 accuracy: right pair, where known, and within 200 m, whatever the label; the as-designed rows don't
+record the assignment, so for them it is distance only, as in their outcome. "cond." = the 30 runs where
+every truth event was detected.)
+- **The localization baseline for U18 is 15 / 50 rank-1 accuracy (V1), with precision of unique at 44 %.**
+  §8.1's estimate was ≈ 14: 7 correct, 7 labelled `inconsistent`, and seed 34 (185 m, `ambiguous`).
+- V1 and V1-asdesigned have the **same** rank-1 accuracy, with no discordant seed. The Phase 0 code changes
+  the labels, not the answers.
+- Conditional on detection, V1 places the right pair within 200 m on 13 / 30 runs (43 %).
+
+### Paired tests (plan §3.0)
+
+Wilcoxon signed-rank on a − b over pairs with both values; exact sign test on rank-1 accuracy. The full list,
+every config against all-on, is in `summary.md`.
+
+| comparison | metric | pairs | non-zero | median a − b | p |
+|---|---|---|---|---|---|
+| V1 vs V0 (all-on) | rank-1 error | 31 | 24 | −355 m | 0.002 |
+| V1 vs V0 (all-on) | true-assignment rank | 16 | 6 | 0 | 0.21 |
+| V1 vs V0 (all-on) | rank-1 accuracy (V1 only / V0 only) | 50 | 13 / 1 | | 0.002 |
+| V1 vs V1-asdesigned | rank-1 error | 39 | 7 | 0 | 0.13 |
+| V1 vs V1-asdesigned | rank-1 accuracy | 50 | 0 / 0 | | — |
+| V0 vs V0-asdesigned | rank-1 error | 33 | 7 | 0 | 0.04 |
+
+- V1 beats V0 on both rank-1 error and rank-1 accuracy, the only clear arm difference.
+- The Phase 0 fixes move few answers. V1 vs as-designed differs on 7 / 39 seeds, six of them by under 75 m (seed
+  49: 1.6 vs 7.0 km). V0 vs as-designed differs on 7 / 33, mostly worse (seed 7: 3.8 km vs 444 m; seed 11:
+  2.9 vs 2.5 km).
+- No LOO config differs from all-on at p < 0.05 for V1 on any metric (n = 20, 10 for the experiments). The
+  largest net rank-1 accuracy shifts are clean (4 / 0 discordant, more correct) and sub:reflection (0 / 3,
+  fewer correct). For V0, loo:geometry gives 6 / 0 (p = 0.03).
+- **Δcost is not computable from Stage A rows.** A rebuild of all-on seed 1 showed why: the true cell's best
+  hypothesis (rank 69) leaves an event unmatched and scores 0.98, against rank 1's 8.34 with both events
+  matched. Under lexicographic ranking these scores are not comparable, and the rows record neither the
+  true assignment's score nor its unmatched count. Rows written from now on carry `true_assignment_score`,
+  `true_assignment_n_unmatched`, `true_cell_n_unmatched` and `n_truth_events`. `evaluate.delta_cost` compares
+  only hypotheses with the same unmatched count.
+
+### What changes for the next steps
+- U18's baseline is now explicit: V1 rank-1 accuracy 15 / 50 and precision of unique 44 % (7 / 16; V1-asdesigned
+  12 / 27). P1.1 must raise precision without lowering rank-1 accuracy.
+- Detection (§8.2, U19) matters more than §8.0 estimated: 20 / 50 all-on runs lose an event before the
+  cascade, and those runs account for 8 of V1's 13 discrimination failures.

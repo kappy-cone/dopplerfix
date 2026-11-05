@@ -155,8 +155,105 @@ def clopper_pearson(k: int, n: int, alpha: float = 0.05, two_sided: bool = True)
     return lo, hi
 
 
-def summarize(rows: Sequence[dict]) -> dict:
-    """Outcome rates (with two-sided 95 % Clopper–Pearson intervals) and the failure taxonomy over rows."""
+def _rate(k: int, n: int) -> dict:
+    return {"k": k, "n": n, "rate": k / n if n else float("nan"), "ci95": clopper_pearson(k, n)}
+
+
+def detection_complete(row: dict) -> bool | None:
+    """True if every truth event of the run was detected (None if the row lacks the counts)."""
+    nt, nd = row.get("n_truth_events"), row.get("truth_events_detected")
+    if nt is None or nd is None:
+        return None
+    return nd >= nt
+
+
+def detection_class(row: dict) -> str | None:
+    """Plan §8.1: ``detection`` when some truth event was never detected, reported *beside* the pre-registered
+    taxonomy (failure_class and reorder_rule are unchanged). It separates "the detector never saw it" from
+    "the cascade killed it"."""
+    return "detection" if detection_complete(row) is False else None
+
+
+def rank1_ok(row: dict, p: EvalParams) -> bool:
+    """Plan §8.1 rank-1 accuracy ignoring status: the rank-1 headline is within success_radius_m and (where
+    known) has the true assignment, whatever the run's status. Same assignment rule as ``outcome``."""
+    err = row.get("rank1_error_m")
+    return err is not None and err <= p.success_radius_m and row.get("rank1_assignment_correct") is not False
+
+
+def delta_cost(row: dict) -> float | None:
+    """Δcost (truth − rank 1, plan §3.0): the best true-assignment hypothesis's score minus the rank-1 score.
+
+    Only comparable when both hypotheses leave the same number of events unmatched: ranking is lexicographic
+    (unmatched count first), and a cost over fewer events is not on the same scale. None otherwise, or when
+    the row lacks the fields (Stage A rows record neither the true assignment's score nor its unmatched count).
+    """
+    ta, r1 = row.get("true_assignment_score"), row.get("rank1_score")
+    if ta is None or r1 is None or row.get("true_assignment_n_unmatched") is None:
+        return None
+    if row["true_assignment_n_unmatched"] != row.get("rank1_n_unmatched"):
+        return None
+    return float(ta) - float(r1)
+
+
+def paired_wilcoxon(a: Sequence[float | None], b: Sequence[float | None]) -> dict:
+    """Wilcoxon signed-rank test on paired continuous values (plan §3.0), a − b; pairs with a None dropped.
+
+    Returns n (pairs used), n_dropped, n_nonzero, median(a − b) and the two-sided p (NaN below 1 non-zero
+    difference). Zero differences are dropped (``zero_method="wilcox"``).
+    """
+    from scipy.stats import wilcoxon
+
+    pairs = [(float(x), float(y)) for x, y in zip(a, b) if x is not None and y is not None]
+    d = np.array([x - y for x, y in pairs], float)
+    out = {"n": len(pairs), "n_dropped": len(a) - len(pairs), "n_nonzero": int(np.sum(d != 0)),
+           "median_diff": float(np.median(d)) if len(d) else float("nan"), "p": float("nan")}
+    if out["n_nonzero"] >= 1:
+        out["p"] = float(wilcoxon(d, zero_method="wilcox", alternative="two-sided").pvalue)
+    return out
+
+
+def paired_sign(a: Sequence[bool], b: Sequence[bool]) -> dict:
+    """Exact sign test on paired binary outcomes (McNemar's exact form): discordant pairs only."""
+    from scipy.stats import binomtest
+
+    a_only = sum(1 for x, y in zip(a, b) if x and not y)
+    b_only = sum(1 for x, y in zip(a, b) if y and not x)
+    n_d = a_only + b_only
+    return {"n": len(a), "a_only": a_only, "b_only": b_only,
+            "p": float(binomtest(a_only, n_d, 0.5).pvalue) if n_d else float("nan")}
+
+
+def summarize(rows: Sequence[dict], p: EvalParams | None = None) -> dict:
+    """Outcome rates (with two-sided 95 % Clopper–Pearson intervals) and the failure taxonomy over rows, plus
+    the plan §8.1 measures: answer rate, rank-1 accuracy ignoring status, detection recall, the ``detection``
+    class beside the taxonomy, and outcome tiers conditional on every truth event being detected."""
+    p = p or EvalParams()
+    out = _summarize_core(rows)
+    n = len(rows)
+    out["answer_rate"] = _rate(sum(1 for r in rows if r.get("status") == "unique"), n)
+    out["rank1_accuracy"] = _rate(sum(1 for r in rows if rank1_ok(r, p)), n)
+    known = [r for r in rows if detection_complete(r) is not None]
+    nt = sum(r["n_truth_events"] for r in known)
+    out["detection"] = {"runs": len(known), "truth_events": nt,
+                        "detected": sum(min(r["truth_events_detected"], r["n_truth_events"]) for r in known),
+                        "runs_complete": sum(1 for r in known if detection_complete(r))}
+    out["detection"]["recall"] = out["detection"]["detected"] / nt if nt else float("nan")
+    cross: dict[str, int] = {}
+    for r in rows:
+        if detection_class(r):
+            key = r.get("failure") or ("none (" + str(r.get("outcome")) + ")")
+            cross[key] = cross.get(key, 0) + 1
+    out["detection_failures"] = {"k": sum(cross.values()), "by_failure": cross}
+    full = [r for r in known if detection_complete(r)]
+    cond = _summarize_core(full)
+    cond["answer_rate"] = _rate(sum(1 for r in full if r.get("status") == "unique"), len(full))
+    cond["rank1_accuracy"] = _rate(sum(1 for r in full if rank1_ok(r, p)), len(full))
+    out["conditional_on_detection"] = cond
+    return out
+
+
+def _summarize_core(rows: Sequence[dict]) -> dict:
     n = len(rows)
     out: dict = {"n": n}
     for o in ("correct", "abstained", "wrong", "confident_wrong", "timeout", "error"):

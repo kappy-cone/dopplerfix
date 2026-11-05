@@ -62,3 +62,38 @@ def test_ablate_smoke_writes_rows_and_cleans_up(tmp_path):
     # resumable: a second call has nothing left to do and keeps the rows
     assert cli.main(["ablate", "--plan", "smoke", "--variants", "V0,V1", "--out", str(out), "--allow-dirty"]) == 0
     assert len((out / "rows.jsonl").read_text().splitlines()) == 2
+
+
+def test_summary_fills_detection_from_kept_files(tmp_path):
+    import pandas as pd
+
+    from doppler import evaluate as ev
+    from doppler import export
+
+    keep = tmp_path / "keep" / cli._unit_tag("C", "loo:path", 6)
+    keep.mkdir(parents=True)
+    (keep / "truth.json").write_text(json.dumps({"events": [{"t_cpa_received_rel_s": 15.0},
+                                                            {"t_cpa_received_rel_s": 45.0}]}))
+    export.write_parquet(pd.DataFrame({"t_cpa_received_rel_s": [14.8, 30.0]}), keep / "events.parquet")
+    rows = [{"scenario": "C", "config": "loo:path", "seed": 6, "variant": "V1-asdesigned"},   # no counts recorded
+            {"scenario": "C", "config": "loo:path", "seed": 6, "variant": "V1", "truth_events_detected": 2}]
+    filled, mismatched = cli._fill_detection(rows, tmp_path, ev.EvalParams())
+    assert (filled, mismatched) == (1, 1)                    # the recorded count is kept, the disagreement counted
+    assert rows[0]["truth_events_detected"] == 1 and rows[0]["n_truth_events"] == 2
+    assert rows[1]["truth_events_detected"] == 2 and rows[1]["n_truth_events"] == 2
+
+
+def test_paired_tests_pair_by_seed():
+    rows = []
+    for s in range(6):
+        rows.append({"scenario": "C", "config": "all", "seed": s, "variant": "V0", "rank1_error_m": 900.0 + s})
+        rows.append({"scenario": "C", "config": "all", "seed": s, "variant": "V1", "rank1_error_m": 100.0 + s,
+                     "rank1_assignment_correct": True})
+        rows.append({"scenario": "C", "config": "loo:adsb", "seed": s, "variant": "V1", "rank1_error_m": 100.0 + s})
+    from doppler import evaluate as ev
+
+    out = {p["label"]: p for p in cli._paired_tests(rows, ev.EvalParams())}
+    t = out["V1 vs V0 (all)"]["tests"]
+    assert t["rank1_error_m"]["n"] == 6 and t["rank1_error_m"]["median_diff"] == -800.0
+    assert t["rank1_accuracy_sign"]["a_only"] == 6
+    assert out["V1: loo:adsb vs all"]["tests"]["rank1_error_m"]["n_nonzero"] == 0

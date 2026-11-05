@@ -866,7 +866,8 @@ def run_locate(cfg: dict, inp: LocateInputs, *, fits=None, audio_data=None, sink
         r1_icao = [str(ts.icao24[k_]) if k_ >= 0 else None for k_ in best["tracks"]] if best else []
         r1_ok = ev_.assignment_correct(r1_icao, match, truth_icao) if best else None
         ta_final = "scored" if ta_stage == "silence" else ta_stage
-        ta_cell_rank = next((d["rank"] for d in surv if true_rows and _true_hyp(d["tracks"])), None)
+        ta_best = next((d for d in surv if true_rows and _true_hyp(d["tracks"])), None)
+        ta_cell_rank = ta_best["rank"] if ta_best else None
         groups, ta_group_rank = [], None
         for d in surv:
             key = tuple(str(ts.icao24[k_]) if k_ >= 0 else "" for k_ in d["tracks"])
@@ -896,6 +897,11 @@ def run_locate(cfg: dict, inp: LocateInputs, *, fits=None, audio_data=None, sink
             "status": status, "rank1_assignment": r1_icao, "rank1_assignment_correct": r1_ok,
             "true_assignment_stage": ta_final, "true_assignment_cell_rank": ta_cell_rank,
             "true_assignment_group_rank": ta_group_rank, "n_assignment_groups": len(groups),
+            # Δcost needs like-for-like scores: ranking is lexicographic in the unmatched count (plan §8.1)
+            "true_assignment_score": ta_best["score"] if ta_best else None,
+            "true_assignment_n_unmatched": sum(k_ < 0 for k_ in ta_best["tracks"]) if ta_best else None,
+            "true_cell_n_unmatched": sum(k_ < 0 for k_ in tc_["tracks"]) if tc_ else None,
+            "n_truth_events": len(truth["events"]),
             "rank1_error_en_m": [de_, dn_] if best else None, "per_event": per_event,
             "outcome": ev_.outcome(status, err, r1_ok, ep),
             "failure": ev_.failure_class(ta_final, r1_ok, err, ep),
@@ -1278,6 +1284,9 @@ def ablate_row(unit: dict, variant: str, res, seconds: float) -> dict:
         "true_cell_score": te.get("score"),
         "n_candidates": len(surv), "n_events": len(res.events or []),
         "truth_events_detected": te.get("truth_events_detected"), "extra_events": te.get("extra_events"),
+        "n_truth_events": te.get("n_truth_events"), "true_assignment_score": te.get("true_assignment_score"),
+        "true_assignment_n_unmatched": te.get("true_assignment_n_unmatched"),
+        "true_cell_n_unmatched": te.get("true_cell_n_unmatched"),
         "rank1_n_unmatched": sum(k_ < 0 for k_ in surv[0]["tracks"]) if surv else None,
         "survivors": res.counts, "hypothesis_enumeration": res.enum_stats,
         "n_hypotheses_scored": res.n_scored, "per_event": te.get("per_event"),
@@ -1389,6 +1398,11 @@ def _ablate_worker(unit: dict, q) -> None:
         q.put({"_error": traceback.format_exc()[-2000:]})
 
 
+def _unit_tag(scenario: str, config: str, seed: int) -> str:
+    """Directory name of an ablation unit under <out>/tmp and <out>/keep."""
+    return f"{scenario}_{config.replace(':', '-').replace('=', '').replace(';', '_')}_s{seed}"
+
+
 def cmd_ablate(args) -> int:
     """Paired leave-one-group-out ablation (P0.6). Rows append to <out>/rows.jsonl (resumable)."""
     import multiprocessing as mp
@@ -1443,7 +1457,7 @@ def cmd_ablate(args) -> int:
     T0 = t_print = _time.perf_counter()
 
     def start(unit):
-        tag = f"{unit['scenario']}_{unit['config'].replace(':', '-').replace('=', '').replace(';', '_')}_s{unit['seed']}"
+        tag = _unit_tag(unit["scenario"], unit["config"], unit["seed"])
         unit = {**unit, "git": git, "config_path": args.config, "timeout_s": args.timeout_s,
                 "tmp_dir": str((out / "tmp" / tag).resolve()), "keep_dir": str((out / "keep" / tag).resolve()),
                 "asdesigned_dir": args.asdesigned_dir}
@@ -1531,12 +1545,76 @@ def _json_safe(o):
     return str(o)
 
 
+def _fill_detection(rows: list[dict], out: Path, ep) -> tuple[int, int]:
+    """Recompute each row's detection counts from its kept truth.json + events.parquet (plan §8.1).
+
+    Rows that already record ``truth_events_detected`` keep their value (a disagreement is counted); rows
+    without it (no events, timeouts, the as-designed arms, whose detection code and config are identical to
+    the current ones at tag variants-asdesigned) get the recomputed counts. Returns (filled, mismatched).
+    """
+    from doppler import evaluate as ev_
+    from doppler import export
+
+    cache: dict[str, tuple[int, int] | None] = {}
+    filled = mismatched = 0
+    for r in rows:
+        tag = _unit_tag(r["scenario"], r["config"], r["seed"])
+        if tag not in cache:
+            keep = out / "keep" / tag
+            if not (keep / "truth.json").exists() or not (keep / "events.parquet").exists():
+                cache[tag] = None
+            else:
+                truth = json.loads((keep / "truth.json").read_text())
+                ev = export.read_parquet(keep / "events.parquet", columns=["t_cpa_received_rel_s"])
+                t_det = ev["t_cpa_received_rel_s"].to_numpy() if "t_cpa_received_rel_s" in ev else []  # none detected
+                m = ev_.match_events(t_det,
+                                     [te["t_cpa_received_rel_s"] for te in truth["events"]], ep.match_tol_s)
+                cache[tag] = (len(truth["events"]), sum(k is not None for k in m))
+        got = cache[tag]
+        if got is None:
+            continue
+        r.setdefault("n_truth_events", got[0])
+        if r.get("truth_events_detected") is None:
+            r["truth_events_detected"] = got[1]
+            filled += 1
+        elif r["truth_events_detected"] != got[1]:
+            mismatched += 1
+    return filled, mismatched
+
+
+def _paired_tests(rows: list[dict], ep) -> list[dict]:
+    """Plan §3.0 paired tests: arm vs arm on all-on C, and each config vs all-on (same variant, same seed)."""
+    from doppler import evaluate as ev_
+
+    by = {(r["scenario"], r["config"], r["seed"], r["variant"]): r for r in rows}
+    comps = [("C", "all", "V1", "C", "all", "V0"), ("C", "all", "V1", "C", "all", "V1-asdesigned"),
+             ("C", "all", "V0", "C", "all", "V0-asdesigned")]
+    confs = sorted({r["config"] for r in rows if r["scenario"] == "C" and r["config"] != "all"})
+    comps += [("C", c_, v, "C", "all", v) for v in ("V0", "V1") for c_ in confs]
+    out = []
+    for sa, ca, va, sb, cb, vb in comps:
+        seeds = sorted(s for (sc, c_, s, v) in by if (sc, c_, v) == (sa, ca, va) and (sb, cb, s, vb) in by)
+        if not seeds:
+            continue
+        A = [by[(sa, ca, s, va)] for s in seeds]
+        B = [by[(sb, cb, s, vb)] for s in seeds]
+        tests = {m: ev_.paired_wilcoxon([a.get(m) for a in A], [b.get(m) for b in B])
+                 for m in ("rank1_error_m", "true_assignment_group_rank")}
+        tests["delta_cost"] = ev_.paired_wilcoxon([ev_.delta_cost(a) for a in A], [ev_.delta_cost(b) for b in B])
+        tests["rank1_accuracy_sign"] = ev_.paired_sign([ev_.rank1_ok(a, ep) for a in A], [ev_.rank1_ok(b, ep) for b in B])
+        label = f"{va} vs {vb} ({ca})" if ca == cb else f"{va}: {ca} vs {cb}"
+        out.append({"label": label, "a": [sa, ca, va], "b": [sb, cb, vb], "seeds": seeds, "tests": tests})
+    return out
+
+
 def ablate_summary(out: Path, config_path: str) -> int:
     """summary.json + summary.md: outcome tiers per (scenario, config, variant), derived fallback arms, and the
     pre-registered re-ordering rule on all-on C."""
     from doppler import evaluate as ev_
 
     rows = [json.loads(line) for line in (out / "rows.jsonl").read_text().splitlines()]
+    ep = ev_.EvalParams.from_dict(section(load_config(config_path), "evaluate"))
+    n_filled, n_mismatch = _fill_detection(rows, out, ep)
     groups: dict[tuple, list] = {}
     for r in rows:
         groups.setdefault((r["scenario"], r["config"], r["variant"]), []).append(r)
@@ -1549,11 +1627,13 @@ def ablate_summary(out: Path, config_path: str) -> int:
             d = ev_.fallback_arm(r, by_key[(sc, conf, seed, "V1")], trig)
             d["variant"] = f"V0->V1 ({trig})"
             groups.setdefault((sc, conf, d["variant"]), []).append(d)
-    summ = {f"{sc}|{conf}|{v}": ev_.summarize(rs) for (sc, conf, v), rs in sorted(groups.items())}
+    summ = {f"{sc}|{conf}|{v}": ev_.summarize(rs, ep) for (sc, conf, v), rs in sorted(groups.items())}
     reorder = {v: ("not applicable (the as-designed code reports no failure taxonomy)"
                    if v.endswith("-asdesigned") else ev_.reorder_rule(rs))
                for (sc, conf, v), rs in groups.items() if sc == "C" and conf == "all"}
-    (out / "summary.json").write_text(json.dumps({"groups": summ, "reorder_rule_C_all": reorder}, indent=1,
+    paired = _paired_tests(rows, ep)
+    (out / "summary.json").write_text(json.dumps({"groups": summ, "reorder_rule_C_all": reorder, "paired": paired,
+                                                  "detection_filled_from_keep": n_filled}, indent=1,
                                                  default=_json_safe))
     lines = ["| scenario | config | variant | n | correct | abstained | wrong | confident-wrong | timeout | "
              "precision(unique) | median err m | top failures |", "|" + "---|" * 12]
@@ -1566,6 +1646,36 @@ def ablate_summary(out: Path, config_path: str) -> int:
                      f"{s_['wrong']['k']} | {s_['confident_wrong']['k']} | {s_['timeout']['k']} | "
                      f"{pu['k']}/{pu['n']} | {'' if med is None else round(med)} | {top} |")
     lines += ["", "Re-ordering rule (all-on C): " + "; ".join(f"{v}: {r_}" for v, r_ in sorted(reorder.items()))]
+    # plan §8.1 measures, beside the pre-registered table (which is unchanged)
+    lines += ["", "Plan §8.1 measures. rank-1 acc = right pair and within the success radius, status ignored; "
+              "answer = unique / n; recall = truth events detected; detection = runs with a truth event never "
+              "detected (beside the taxonomy, not in it); 'cond.' = runs where every truth event was detected.", "",
+              "| scenario | config | variant | n | rank-1 acc | answer rate | precision(unique) | recall | "
+              "detection | cond. n | cond. correct | cond. rank-1 acc | cond. precision(unique) |",
+              "|" + "---|" * 13]
+    for key, s_ in summ.items():
+        sc, conf, v = key.split("|")
+        d_, c_ = s_["detection"], s_["conditional_on_detection"]
+        rec = f"{d_['detected']}/{d_['truth_events']}" if d_["truth_events"] else "n/a"
+        lines.append(f"| {sc} | {conf} | {v} | {s_['n']} | {s_['rank1_accuracy']['k']} | "
+                     f"{s_['answer_rate']['k']} | {s_['precision_unique']['k']}/{s_['precision_unique']['n']} | {rec} | "
+                     f"{s_['detection_failures']['k']} | {c_['n']} | {c_['correct']['k']} | "
+                     f"{c_['rank1_accuracy']['k']} | {c_['precision_unique']['k']}/{c_['precision_unique']['n']} |")
+    lines += ["", "Paired tests (plan §3.0): Wilcoxon signed-rank on a − b (pairs with a missing value dropped); "
+              "exact sign test on rank-1 accuracy. Δcost is not computable from rows without true-assignment "
+              "scores (Stage A).", "",
+              "| comparison (a vs b) | metric | n | n≠0 | median a−b | p |", "|" + "---|" * 6]
+    for p_ in paired:
+        for m, t_ in p_["tests"].items():
+            if m == "rank1_accuracy_sign":
+                lines.append(f"| {p_['label']} | rank-1 acc (a only / b only) | {t_['n']} | "
+                             f"{t_['a_only']}/{t_['b_only']} | | {t_['p']:.3g} |")
+            else:
+                lines.append(f"| {p_['label']} | {m} | {t_['n']} | {t_['n_nonzero']} | {t_['median_diff']:.3g} | "
+                             f"{t_['p']:.3g} |")
+    if n_filled:
+        lines += ["", f"Detection counts for {n_filled} rows (no-event, timeout and as-designed rows) were recomputed "
+                  f"from their kept truth.json + events.parquet ({n_mismatch} disagreed with a recorded count)."]
     (out / "summary.md").write_text("\n".join(lines) + "\n")
     print("\n".join(lines))
     return 0
