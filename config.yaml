@@ -363,3 +363,9 @@ realism:
   turn_rate_max_deg_s: 3.0
   n_near_traffic: 4
   mic_height_range_m: [1.0, 10.0]
+
+diagnostics:                 # report-only diagnostics (doppler/nulltest.py, doppler/commitment.py); off by default
+  null_test: false           # time-shift null tests: events shifted against the ADS-B, cascade + scoring rerun
+  null_shifts_frac: [0.25, 0.5, 0.75]   # shifts as fractions of the clip, each event wrapped as a unit
+  commit_result: false       # SHA-256 of the top candidates, recorded before anything truth-derived is reported
+  commit_top_k: 5            # candidates (by rank) the commitment covers

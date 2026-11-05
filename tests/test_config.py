@@ -4,7 +4,7 @@ import dataclasses
 import pytest
 
 import cli
-from doppler import audio, cascade, classify, detect, evaluate, fit, realism, ridge, score, synth, tracks
+from doppler import audio, cascade, classify, detect, evaluate, fit, nulltest, realism, ridge, score, synth, tracks
 
 CFG = cli.load_config("config.yaml")
 
@@ -22,6 +22,7 @@ SECTIONS = [
     ("score", score.ScoreParams, set()),
     ("realism", realism.RealismParams, set()),
     ("evaluate", evaluate.EvalParams, set()),
+    ("diagnostics", nulltest.DiagnosticsParams, set()),
 ]
 
 

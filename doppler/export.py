@@ -391,3 +391,31 @@ def write_score_raster(path: Path, i: np.ndarray, j: np.ndarray, value: np.ndarr
             ds.set_band_description(1, description)
         kind = "sparse GTiff (raster too large for an in-memory COG)"
     return {"written": True, "format": kind, "width": W, "height": H, "crs": str(crs)}
+
+
+# ---------------------------------------------------------------------------
+# Result commitment: re-check a saved run (doppler/commitment.py holds the canonical form)
+# ---------------------------------------------------------------------------
+def commitment_records_from_gpkg(path: Path) -> tuple[list[dict], int]:
+    """Canonical commitment records rebuilt from a results.gpkg candidates layer, and the candidate count."""
+    from .commitment import candidate_record
+
+    df = pyogrio.read_dataframe(path, layer="candidates", read_geometry=False)
+    n_ev = sum(1 for c in df.columns if c.startswith("track_e"))
+    recs = [candidate_record(int(r["rank"]), r["est_lat"], r["est_lon"], r["score"], r["dt_s"],
+                             ["" if r[f"track_e{e}"] is None else str(r[f"track_e{e}"]) for e in range(n_ev)])
+            for _, r in df.iterrows()]
+    return recs, len(df)
+
+
+def verify_result(run_dir: Path, expected_sha256: str | None = None) -> dict:
+    """Recompute a run's result commitment from its results.gpkg and compare it with run.json (and a hash kept
+    elsewhere, if given). Raises KeyError when the run recorded no commitment."""
+    from .commitment import verify
+
+    run_dir = Path(run_dir)
+    rj = json.loads((run_dir / "run.json").read_text())
+    if "result_commitment" not in rj:
+        raise KeyError(f"{run_dir / 'run.json'} has no result_commitment (run locate with --commit-result)")
+    recs, n = commitment_records_from_gpkg(run_dir / "results.gpkg")
+    return verify(recs, n, rj["result_commitment"], expected_sha256)

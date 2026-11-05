@@ -95,3 +95,48 @@ def test_locate_from_events_file_matches_detection_and_records_edits(scenario_di
     assert cli.main(base + ["--run-id", "edited", "--events", str(ev)]) == 0
     c = json.loads((tmp_path / "out" / "edited" / "run.json").read_text())
     assert "events_file" in c["manual_inputs"] and "events file edited" in c["manual_inputs"]["events_file"]["reasons"]
+
+
+@pytest.mark.slow
+def test_locate_diagnostics_null_test_and_result_commitment(scenario_dir, tmp_path, capsys):
+    """--null-test / --commit-result: report-only blocks in run.json; verify-result accepts the saved run and
+    rejects an edited one; the commitment does not depend on whether truth was given."""
+    import yaml
+
+    cfg = cli.load_config("config.yaml")
+    cfg["outputs"]["root"] = str(tmp_path / "out")
+    cfgp = tmp_path / "config.yaml"
+    cfgp.write_text(yaml.safe_dump(cfg))
+    assert cli.main(["locate", "--config", str(cfgp), "--scenario", str(scenario_dir), "--no-plots", "--run-id", "d",
+                     "--null-test", "--commit-result"]) == 0
+    run = tmp_path / "out" / "d"
+    rj = json.loads((run / "run.json").read_text())
+    nt, rc = rj["null_test"], rj["result_commitment"]
+    assert rj["config"]["diagnostics"]["null_test"] is True
+    assert [r["shift_s"] for r in nt["shifted"]] == pytest.approx([150.0, 300.0, 450.0])
+    cands = pyogrio.read_dataframe(run / "results.gpkg", layer="candidates")
+    top = cands[cands["rank"] == 1].iloc[0]
+    assert nt["real"]["n_explained"] == 2 and nt["real"]["best_score"] == pytest.approx(float(top["score"]), rel=1e-6)
+    assert nt["n_shifted_not_worse"] == 0                     # clean scenario: no wrong timing fits as well
+    # the commitment is printed before the truth summary
+    printed = capsys.readouterr().out
+    assert printed.index(rc["sha256"]) < printed.index("true cell:")
+    assert cli.main(["verify-result", str(run), "--sha256", rc["sha256"]]) == 0
+
+    # same search without truth: same commitment
+    from argparse import Namespace
+
+    inp = cli.locate_inputs(Namespace(scenario=str(scenario_dir), audio=None, tracks=None, registry=None, truth=None,
+                                      region=None, sidecar=None, events=None, write_grid=None))
+    inp.truth_path = None
+    res = cli.run_locate(cfg, inp)
+    assert res.truth_eval is None
+    from doppler import commitment
+
+    assert commitment.commit(cli.commitment_records(res), len(res.surv), rc["top_k"])["sha256"] == rc["sha256"]
+
+    # edit the saved result: verification fails
+    df = pyogrio.read_dataframe(run / "results.gpkg", layer="candidates")
+    df.loc[df["rank"] == 1, "dt_s"] += 0.5
+    pyogrio.write_dataframe(df, run / "results.gpkg", layer="candidates")
+    assert cli.main(["verify-result", str(run)]) == 1

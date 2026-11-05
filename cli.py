@@ -1,9 +1,10 @@
-"""Command line: synth | events | tracks | locate.
+"""Command line: synth | events | tracks | locate | verify-result.
 
     python cli.py synth  --config config.yaml --out outputs/synth_seed0 [--seed 0] [--event-times 150,420]
     python cli.py events --config config.yaml --audio outputs/synth_seed0/audio.wav [--out events.json]
     python cli.py tracks --config config.yaml --tracks outputs/synth_seed0/tracks.csv --registry .../aircraft_db.csv
-    python cli.py locate ...   (milestones 4-5)
+    python cli.py locate ...   (milestones 4-5; --null-test / --commit-result: report-only diagnostics)
+    python cli.py verify-result outputs/<run>  [--sha256 <hash kept elsewhere>]
 """
 from __future__ import annotations
 
@@ -223,14 +224,21 @@ def load_tracks(cfg: dict, tracks_path: str, registry_path: str | None,
 # ---------------------------------------------------------------------------
 # Cascade orchestration (shared by locate and synth --cascade-decoys)
 # ---------------------------------------------------------------------------
+def cascade_params(cfg: dict):
+    """CascadeParams from config (cascade:, plus the two hypothesis keys that live under score:)."""
+    from doppler import cascade
+
+    cp_cfg = {**section(cfg, "cascade"), **{k: v for k, v in section(cfg, "score").items()
+                                            if k in ("allow_shared_tracks", "max_hypotheses_per_cell")}}
+    return cascade.CascadeParams.from_dict(cp_cfg)
+
+
 def cascade_inputs(cfg: dict, fits, prepared: list[tracks.Track], tprior, duration_s: float, c: float,
                    region_lonlat):
     """ObservedEvents, Δt prior, windowed TrackSet, grid spec and cascade params."""
     from doppler import cascade, geo
 
-    cp_cfg = {**section(cfg, "cascade"), **{k: v for k, v in section(cfg, "score").items()
-                                            if k in ("allow_shared_tracks", "max_hypotheses_per_cell")}}
-    cp = cascade.CascadeParams.from_dict(cp_cfg)
+    cp = cascade_params(cfg)
     clock = float(section(cfg, "time_prior").get("clock_tol_s", 10.0))
     span = (min(t.t_s[0] for t in prepared), max(t.t_s[-1] for t in prepared)) if prepared else None
     prior = cascade.dt_prior_from(tprior.mode, tprior.start_s, tprior.window_s, clock, duration_s, span)
@@ -1007,8 +1015,11 @@ def file_sha256(path: str | Path) -> str | None:
     return h.hexdigest()
 
 
-def write_outputs(res: LocateResult, args, T0: float) -> int:
-    """Candidates, tracks and CPA layers, score.tif, plots, viewer, run.json and the console summary."""
+def write_outputs(res: LocateResult, args, T0: float, extra: dict | None = None) -> int:
+    """Candidates, tracks and CPA layers, score.tif, plots, viewer, run.json and the console summary.
+
+    ``extra``: report-only blocks appended to run.json (the diagnostics: section); none when they are off.
+    """
     import time as _time
 
     import geopandas as gpd
@@ -1166,6 +1177,8 @@ def write_outputs(res: LocateResult, args, T0: float) -> int:
         "timings_s": timings, "truth_eval": truth_eval,
         "config": cfg,
     }
+    if extra:
+        info.update(extra)
     export.write_run_json(run_dir, info)
     export.update_latest(root, run_dir)
     fp = json.loads((run_dir / "run.json").read_text())["disk_footprint"]
@@ -1212,11 +1225,118 @@ def cmd_locate(args) -> int:
         run_dir = export.new_run_dir(root, args.run_id, tag=inp.tag)
         return run_dir, export.LayerBuffer(run_dir / "results.gpkg")
 
+    if getattr(args, "null_test", False) or getattr(args, "commit_result", False):
+        cfg["diagnostics"] = {**section(cfg, "diagnostics"),
+                              **({"null_test": True} if getattr(args, "null_test", False) else {}),
+                              **({"commit_result": True} if getattr(args, "commit_result", False) else {})}
     res = run_locate(cfg, inp, sink_factory=sink)
     if res is None:
         print("no events detected", file=sys.stderr)
         return 1
-    return write_outputs(res, args, T0)
+    return write_outputs(res, args, T0, locate_diagnostics(res))
+
+
+# ---------------------------------------------------------------------------
+# Report-only diagnostics (config.yaml diagnostics:): blind result commitment, time-shift null tests
+# ---------------------------------------------------------------------------
+def commitment_records(res: LocateResult) -> list[dict]:
+    """Canonical commitment records of the ranked candidates (search outputs only, no truth)."""
+    from doppler import commitment
+
+    return [commitment.candidate_record(d["rank"], d["est_lat"], d["est_lon"], d["score"], d["dt_s"],
+                                        [str(res.ts.icao24[k_]) if k_ >= 0 else "" for k_ in d["tracks"]])
+            for d in res.surv]
+
+
+def real_search_best(res: LocateResult):
+    """The real search's rank 1 in null-test terms."""
+    from doppler import nulltest
+
+    b = nulltest.SearchBest(n_events=len(res.events), n_candidates=len(res.surv),
+                            survivors={k: int(res.counts[k]) for k in ("cpa", "offset", "silence")})
+    if res.surv:
+        d = res.surv[0]
+        b.n_explained = int(sum(k_ >= 0 for k_ in d["tracks"]))
+        b.score, b.dt_s, b.lat, b.lon = float(d["score"]), float(d["dt_s"]), float(d["est_lat"]), float(d["est_lon"])
+        b.tracks = [str(res.ts.icao24[k_]) if k_ >= 0 else "" for k_ in d["tracks"]]
+    return b
+
+
+def run_null_tests(res: LocateResult, fracs) -> dict:
+    """Shift the events against the tracks by each fraction of the clip (wrapped), search again, compare.
+
+    Same grid, Δt prior, tracks and parameters as the real search. When shifted ridges reach past the real
+    TrackSet window, the TrackSet is rebuilt over the wider span from the same prepared tracks (same time grid).
+    """
+    import time as _time
+
+    from doppler import nulltest
+
+    cfg = res.cfg
+    dem_source = load_dem_source(cfg, res.geoid)
+    mic_h = float(section(cfg, "mic").get("height_agl_m", 1.5))
+    cp = cascade_params(cfg)
+    D = float(res.duration)
+    shifted, extra = [], []
+    for f, s in zip(fracs, nulltest.shift_seconds(fracs, D)):
+        t = _time.perf_counter()
+        ev = nulltest.shift_events(res.events, s, D)
+        lo, hi = nulltest.ridge_span_s(ev)
+        ts = res.ts
+        if lo < 0.0 or hi > D:
+            ts = tracks.build_trackset(res.prepared, res.ts.t0_s + min(0.0, lo), float(res.ts.t_s[-1]) + max(0.0, hi - D),
+                                       res.ts.dt_s)
+        shifted.append((f, s, nulltest.search(res.spec, ev, ts, res.prior, dem_source, mic_h, res.c, cp, res.sp)))
+        extra.append({"ridge_span_rel_s": [lo, hi], "seconds": _time.perf_counter() - t})
+    out = nulltest.summarize(real_search_best(res), shifted)
+    for row, x in zip(out["shifted"], extra):
+        row.update(x)
+    out["definition"] = ("events shifted by shift_frac of the clip against the ADS-B (each wrapped as a unit), "
+                         "cascade + locked scoring rerun; report only (no threshold, ranking unchanged). "
+                         "explained_gap > 0: the real timing explains more events than any shift; "
+                         "best_shifted_over_real: score ratio when both explain the same number")
+    return out
+
+
+def locate_diagnostics(res: LocateResult) -> dict:
+    """run.json blocks for the enabled diagnostics (empty when they are off, so outputs match a plain run).
+
+    The commitment is computed first, from search outputs only, and printed before write_outputs reports
+    anything truth-derived.
+    """
+    from doppler import commitment, nulltest
+
+    dp = nulltest.DiagnosticsParams.from_dict(section(res.cfg, "diagnostics"))
+    out = {}
+    if dp.commit_result:
+        out["result_commitment"] = commitment.commit(commitment_records(res), len(res.surv), dp.commit_top_k)
+        print(f"result commitment (top {dp.commit_top_k}): sha256 {out['result_commitment']['sha256']}")
+    if dp.null_test:
+        out["null_test"] = nt = run_null_tests(res, dp.null_shifts_frac)
+        r_, b_ = nt["real"], nt["shifted"][nt["best_shifted"]] if nt["best_shifted"] is not None else None
+        print(f"null test: real rank 1 explains {r_['n_explained']}/{r_['n_events']} events, score "
+              f"{r_['best_score'] if r_['best_score'] is None else round(r_['best_score'], 3)}"
+              + (f"; best shift {b_['shift_frac']:g} of the clip ({b_['shift_s']:+.0f} s) explains "
+                 f"{b_['n_explained']}, score {b_['best_score'] if b_['best_score'] is None else round(b_['best_score'], 3)}"
+                 f" ({b_['n_candidates']} candidates); explained gap {nt['explained_gap']}, ratio "
+                 f"{nt['best_shifted_over_real'] and round(nt['best_shifted_over_real'], 2)}" if b_ else ""))
+    return out
+
+
+def cmd_verify_result(args) -> int:
+    """Check a run's saved candidates (results.gpkg) against its recorded commitment and an optional hash."""
+    from doppler import export
+
+    try:
+        r = export.verify_result(Path(args.run), args.sha256)
+    except (FileNotFoundError, KeyError, ValueError) as e:
+        print(f"cannot verify: {e}", file=sys.stderr)
+        return 2
+    print(("OK" if r["ok"] else "MISMATCH") + f": recomputed {r['recomputed_sha256']}, recorded "
+          f"{r['recorded_sha256']}" + (f", expected {r['expected_sha256']}" if r["expected_sha256"] else ""))
+    if r.get("mismatched_ranks"):
+        print(f"  ranks that differ from the recorded payload: {r['mismatched_ranks']}")
+    return 0 if r["ok"] else 1
 
 
 # ---------------------------------------------------------------------------
@@ -1776,7 +1896,16 @@ def main(argv=None) -> int:
     l.add_argument("--events", help="events file from `cli.py events --out X.parquet` instead of detecting "
                                     "(its provenance is checked; a mismatch is recorded as a manual input)")
     l.add_argument("--variant", help="named design variant from config.yaml variants: (e.g. V0 strict, V1 robust)")
+    l.add_argument("--null-test", dest="null_test", action="store_true",
+                   help="report-only time-shift null tests (sets diagnostics.null_test)")
+    l.add_argument("--commit-result", dest="commit_result", action="store_true",
+                   help="record a SHA-256 commitment of the top candidates (sets diagnostics.commit_result)")
     l.set_defaults(func=cmd_locate)
+
+    vr = sub.add_parser("verify-result", help="check a run's saved candidates against its result commitment")
+    vr.add_argument("run", help="run directory (run.json + results.gpkg)")
+    vr.add_argument("--sha256", help="hash recorded elsewhere (e.g. published before the truth was consulted)")
+    vr.set_defaults(func=cmd_verify_result)
 
     a = sub.add_parser("ablate", help="paired leave-one-group-out ablation (rows.jsonl + summary), disk-safe")
     a.add_argument("--config", default="config.yaml")
