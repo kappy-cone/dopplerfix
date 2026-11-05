@@ -1054,7 +1054,7 @@ next) or the registry rule (P0.7). Phase 4 stays at full scale.
 - **Hand-check ≥ 5 Stage A rows** against their kept truth and events before relying on these metrics.
 - All of the above is re-summarised from the existing Stage A rows: no re-run.
 
-### 8.2 Detection becomes an explicit accuracy item (new; USER U19)
+### 8.2 Detection becomes an explicit accuracy item (new; U19, approved)
 A detection miss caps accuracy no matter what Phases 1–3 do. Candidate algorithmic changes, none of which
 moves `detect.trigger_db` or any other provisional threshold:
 - a harmonic-summed tonal statistic (prop harmonic stacks, as `ridge.doppler_hough` already sums for seeding);
@@ -1069,7 +1069,7 @@ risk. The detection thresholds themselves are calibrated only on milestone 4.5 f
 1. 8.1 measurement fixes (re-summarise Stage A) and the hand-check.
 2. **Phase 1**, as written. Acceptance for P1.1/P1.4 (U18): precision of unique above the status-ignored
    baseline (44 %), with rank-1 accuracy not lower, and answer rate reported.
-3. **8.2 detection** (if U19 approves), alongside Phase 1, because it acts on a different stage.
+3. **8.2 detection** (U19, approved), alongside Phase 1, because it acts on a different stage.
 4. **Real data:** P4.3 real-traffic replay and P5.3 UAT coverage straight after Phase 1, and **field
    recordings requested now**. Stage A raises their priority: detection and the audibility levels can only
    be calibrated on real audio, and the synthetic level model is what puts events on the detection cliff.
@@ -1107,10 +1107,10 @@ risk. The detection thresholds themselves are calibrated only on milestone 4.5 f
 - **Screen on truth-derived ridges first** (`tests/test_cascade.ridge_events`), then the ablation.
 - **Richer rows**, so a changed metric means re-summarising, not re-running.
 
-### 8.5 New USER decisions
+### 8.5 New USER decisions: both APPROVED by the user (session 5)
 - **U18 (P1.1/P1.4 acceptance):** may Phase 1's new status be adopted as the default only if, on all-on C
   n = 100 paired with Stage A, precision of unique beats the status-ignored baseline (44 %), rank-1 accuracy
-  does not drop, and the answer rate is reported? Recommend yes. It is an acceptance test, not a threshold:
+  does not drop, and the answer rate is reported? **Approved.** It is an acceptance test, not a threshold:
   it tunes nothing.
 - **U19 (detection item):** add 8.2 (algorithmic detection improvements, measured on recall and false
   events; thresholds untouched until 4.5)? It changes methodology step 2 (event detection). Recommend yes:
