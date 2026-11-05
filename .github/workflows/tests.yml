@@ -1,0 +1,34 @@
+# Fast test suite on every push to main and every pull request (CONTRIBUTING.md).
+# Slow end-to-end tests (pytest -m slow, ~10-15 min, synthesize audio) are run locally before a merge.
+name: tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+concurrency:                       # a newer push cancels the older run on the same branch
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  fast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Geoid grids (cached; tests/test_geo.py skips its grid test if they are missing)
+        uses: actions/cache@v4
+        with:
+          path: data/proj
+          key: proj-grids-v1
+      - name: Fetch geoid grids if not cached
+        run: |
+          mkdir -p data/proj
+          [ -f data/proj/us_noaa_g2018u0.tif ] || pyproj sync --file us_noaa_g2018u0 --target-directory data/proj || true
+          [ -f data/proj/us_nga_egm96_15.tif ] || pyproj sync --file us_nga_egm96_15 --target-directory data/proj || true
+      - name: Fast tests
+        run: python -m pytest -m "not slow" -q
