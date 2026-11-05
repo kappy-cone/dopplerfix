@@ -93,6 +93,7 @@ class ObservedEvent:
     ridge_w: NDArray
     fit_rms_hz: float = float("nan")    # residual RMS of the characterization fit
     fit_noise_hz: float = float("nan")  # white ridge scatter about the fit
+    band_hz: tuple[float, float] | None = None   # frequency band the ridge was searched in (P1.1 outlier density)
 
     @property
     def gof(self) -> float:
@@ -117,7 +118,9 @@ def observed_events(fits: Sequence, c: float) -> list[ObservedEvent]:
         out.append(ObservedEvent(k, int(e.cls), float(e.t_cpa_received_s), float(e.v_mps), float(e.d_m),
                                  float(e.f0_hz), cov3, tuple(float(x) for x in e.coverage),
                                  np.asarray(e.ridge.t_s, float), np.asarray(e.ridge.f_hz, float), w,
-                                 float(getattr(e, "rms_hz", np.nan)), float(getattr(e, "noise_hz", np.nan))))
+                                 float(getattr(e, "rms_hz", np.nan)), float(getattr(e, "noise_hz", np.nan)),
+                                 tuple(float(x) for x in e.ridge.band_hz) if getattr(e.ridge, "band_hz", None)
+                                 else None))
     return out
 
 

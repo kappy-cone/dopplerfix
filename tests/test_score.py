@@ -148,3 +148,144 @@ def test_ambiguity_unique_vs_spread_out_ties():
     a = score.ambiguity([1.0, 1.05, 1.1], near, p)
     assert a["status"] == "ambiguous" and a["n_tied"] == 3 and a["spread_m"] == pytest.approx(900.0)
     assert score.ambiguity([], [], p)["status"] == "none"
+
+
+# ---------------------------------------------------------------------------
+# P1.1 calibrated likelihood and P1.4 ambiguity v2 (comparison arms V1c / V0c)
+# ---------------------------------------------------------------------------
+CAL = score.ScoreParams(likelihood="calibrated", ambiguity_mode="v2")
+
+
+def test_huber_is_still_the_default():
+    p = score.ScoreParams()
+    assert p.likelihood == "huber" and p.ambiguity_mode == "v1"
+
+
+def test_calibrated_scorer_recovers_dt_and_f0_and_rejects_swapped_tracks():
+    from doppler import cascade as cs
+
+    ts, mic, evs = _two_track_setup()
+    good = score.score_hypotheses(evs, [cs.Hypothesis(1, (0, 1), (-5.0, 5.0))], ts, {1: mic}, START, 343.0, CAL)[0]
+    assert good.dt_s == pytest.approx(1.7, abs=0.02) and good.f0_hz == pytest.approx([120.0, 150.0], rel=1e-4)
+    bad = score.score_hypotheses(evs, [cs.Hypothesis(1, (1, 0), (-5.0, 5.0))], ts, {1: mic}, START, 343.0, CAL)[0]
+    assert bad.cost - good.cost > 100.0                    # nats, a total (not a per-point mean)
+
+
+def test_calibrated_loss_is_bounded_and_unmodellable_points_cost_the_outlier_density():
+    rd = score.RidgeObs(np.arange(20.0), np.full(20, 100.0), 0.1, sigma_white_hz=0.1, kappa=1.0, band_hz=50.0,
+                        v_mps=60.0)
+    p = score.ScoreParams(likelihood="calibrated", adsb_pos_m=0, adsb_speed_mps=0, adsb_latency_s=0)
+    ratio = np.ones(20)
+    base, *_ = score._event_nll(rd, ratio, 343.0, p)
+    far = rd.f_hz.copy()
+    far[3] = 140.0                                         # a wild point (harmonic hop)
+    hop, *_ = score._event_nll(score.RidgeObs(rd.t_s, far, 0.1, 0.1, 1.0, 50.0, 60.0), ratio, 343.0, p)
+    # bounded: the hop costs its own point at the outlier density (instead of its good-fit cost), plus little else
+    own = -np.log(p.outlier_frac / 50.0) - np.log(np.sqrt(2 * np.pi) * 0.1)
+    assert own < hop - base < own + 1.0
+    miss = ratio.copy()
+    miss[:4] = np.nan
+    _, _, _, n_miss = score._event_nll(rd, miss, 343.0, p)
+    assert n_miss == 4
+    assert score._unmatched_nll(rd, p) == pytest.approx(20 * -np.log(p.outlier_frac / 50.0))
+
+
+def test_calibrated_silence_penalty_is_in_nats():
+    from doppler import cascade as cs
+
+    ts, mic, evs = _two_track_setup()
+    h = [cs.Hypothesis(7, (0, 1), (-5.0, 5.0))]
+    p = score.ScoreParams(likelihood="calibrated", refine_in_cell=False)
+    a = score.rank_cells(evs, [(7, mic, h, 0.0)], ts, START, 343.0, p, (-10.0, 10.0), 100.0)[0]
+    b = score.rank_cells(evs, [(7, mic, h, 2.5)], ts, START, 343.0, p, (-10.0, 10.0), 100.0)[0]
+    assert b.best.cost - a.best.cost == pytest.approx(2.5)
+
+
+def test_ambiguity_v2_tie_set_assignment_gap_and_locus():
+    base = np.array([6.37e6, 0.0, 0.0])
+    xyz = [base, base + [0, 150, 0], base + [0, 900, 0]]
+    nu = [0, 0, 0]
+    same = [("a", "b")] * 3
+    u = score.ambiguity_v2([10.0, 12.0, 20.0], xyz, nu, same, 2, CAL)       # Δnll 2 < 3.00: tied, but near
+    assert u["status"] == "unique" and u["n_tied"] == 2 and u["dnll_tie"] == pytest.approx(2.9957, abs=1e-3)
+    far = score.ambiguity_v2([10.0, 11.0, 12.5], xyz, nu, same, 2, CAL)     # a tied cell 900 m away
+    assert far["status"] == "ambiguous"
+    gap = score.ambiguity_v2([10.0, 11.0, 20.0], xyz, nu, [("a", "b"), ("a", "c"), ("a", "b")], 2, CAL)
+    assert gap["status"] == "ambiguous" and gap["assignment_gap_nll"] == pytest.approx(1.0)  # other aircraft tied
+    clear = score.ambiguity_v2([10.0, 14.0, 20.0], xyz, nu, [("a", "b"), ("a", "c"), ("a", "b")], 2, CAL)
+    assert clear["status"] == "unique" and clear["assignment_gap_nll"] == pytest.approx(4.0)
+    assert score.ambiguity_v2([10.0], xyz[:1], [0], same[:1], 1, CAL)["status"] == "locus"
+    assert score.ambiguity_v2([], [], [], [], 0, CAL)["status"] == "none"
+    other_count = score.ambiguity_v2([10.0, 10.5], xyz[:2], [0, 1], [("a", "b"), ("a", "")], 2, CAL)
+    assert other_count["n_tied"] == 1                       # a different unmatched count is never tied
+
+
+def test_gof_status_passes_the_truth_and_flags_a_shifted_ridge():
+    from dataclasses import replace
+
+    ts, mic, evs = _two_track_setup(noise=0.3)
+    p = score.ScoreParams(likelihood="calibrated", ambiguity_mode="v2")
+    ok = score.gof_status(score.prepare_ridges(evs, p), ts, mic, (0, 1), 1.7, START, 343.0, p)
+    assert not ok["inconsistent"] and all(pv > 0.01 for pv in ok["p"])
+    shifted = [evs[0], replace(evs[1], ridge_t_s=evs[1].ridge_t_s + 4.0)]   # one event 4 s off the shared Δt
+    bad = score.gof_status(score.prepare_ridges(shifted, p), ts, mic, (0, 1), 1.7, START, 343.0, p)
+    assert bad["inconsistent"] and bad["chi2"][1] is not None
+    assert bad["chi2"][0] is not None and None not in bad["p"]
+    skip = score.gof_status(score.prepare_ridges(evs, p), ts, mic, (0, -1), 1.7, START, 343.0, p)
+    assert skip["chi2"][1] is None                          # unmatched events are skipped
+
+
+def _wilks_trial(seed: int, rho: float, noise: float = 0.3):
+    """2·(nll(truth) − nll(MLE)) over (E, N, Δt), f0 profiled, on two tracks with AR(1) ridge noise generated at
+    the scorer's decimation (ρ = 0: white). No ADS-B error exists in the simulation, so its budget is off."""
+    from dataclasses import replace
+
+    from scipy.optimize import minimize
+
+    p = score.ScoreParams(likelihood="calibrated", adsb_pos_m=0.0, adsb_speed_mps=0.0, adsb_latency_s=0.0,
+                          sigma_floor_hz=1e-4)
+    ts, mic, evs = _two_track_setup(noise=noise, seed=seed)
+    rng = np.random.default_rng(1000 + seed)
+    new = []
+    for k, e in enumerate(evs):
+        clean = score.modeled_ratio(mic, k, ts, START + 1.7 + e.ridge_t_s, 343.0)[0] * (120.0, 150.0)[k]
+        b = np.floor((e.ridge_t_s - e.ridge_t_s.min()) / 0.5).astype(int)
+        x = np.zeros(b.max() + 1)
+        x[0] = rng.normal()
+        for i in range(1, len(x)):
+            x[i] = rho * x[i - 1] + np.sqrt(1 - rho ** 2) * rng.normal()
+        new.append(replace(e, ridge_f_hz=clean + noise * x[b], ridge_w=np.full(len(b), 1 / noise ** 2)))
+    ridges = score.prepare_ridges(new, p)
+    B = score._cell_basis(mic)
+
+    def nll(z):
+        return float(score._hyp_cost(np.array([z[2]]), ridges, (0, 1), mic + z[0] * B[0] + z[1] * B[1], ts, START,
+                                     343.0, p.huber_k, p)[0].sum())
+
+    n_true = nll([0.0, 0.0, 1.7])
+    best = min((minimize(nll, np.array(x0, float), method="Nelder-Mead",
+                         options={"xatol": 1e-3, "fatol": 1e-6, "maxiter": 2000})
+                for x0 in ([0, 0, 1.7], [40, -40, 1.6], [-40, 40, 1.8])), key=lambda r: r.fun)
+    interior = abs(best.x[0]) < 300 and abs(best.x[1]) < 300 and abs(best.x[2] - 1.7) < 3
+    return 2.0 * (n_true - min(best.fun, n_true)), interior
+
+
+@pytest.mark.slow
+def test_wilks_white_noise_chi2_3():
+    """P1.1 test (plan, stated correctly): on white-noise ridges 2Δnll(truth − MLE) ~ χ²₃ at interior optima."""
+    from scipy.stats import chi2, kstest
+
+    d = [x for x, interior in (_wilks_trial(s, 0.0) for s in range(200)) if interior]
+    assert len(d) >= 150
+    assert kstest(d, chi2(3).cdf).pvalue > 0.01
+
+
+@pytest.mark.slow
+@pytest.mark.xfail(strict=False, reason="pre-registered P1.1 test missed in session 5: mean 2Δnll 3.71 vs 3 ± 20 % "
+                   "(n = 100); reported in reports/stageA.md, not tuned (registry rule)")
+def test_correlated_ridge_noise_scale_within_20_percent():
+    """P1.1 test: with AR(1) ρ₁ = 0.6 the effective-N correction keeps the likelihood scale calibrated: mean
+    2Δnll within 20 % of χ²₃'s 3 (without it, about 3·(1 + ρ)/(1 − ρ) = 12)."""
+    d = [x for x, interior in (_wilks_trial(s, 0.6) for s in range(100)) if interior]
+    assert len(d) >= 75
+    assert np.mean(d) == pytest.approx(3.0, rel=0.2)

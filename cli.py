@@ -810,15 +810,26 @@ def run_locate(cfg: dict, inp: LocateInputs, *, fits=None, audio_data=None, sink
     surv.sort(key=lambda d: (sum(k_ < 0 for k_ in d["tracks"]), d["score"]))
     for k_, d in enumerate(surv, 1):
         d["rank"] = k_
-    amb = score.ambiguity([d["score"] for d in surv], [d["xyz_est"] for d in surv], sp,
-                          [sum(k_ < 0 for k_ in d["tracks"]) for d in surv])
-    tied_ids = {surv[k_]["cell_id"] for k_ in amb["tied"]}
-    # Run status (P0.4, provisional): the ambiguity status, overridden by "inconsistent" when the rank-1
-    # hypothesis fits some matched event far worse than that event's model-free ridge scatter.
     ridges_ = score.prepare_ridges(events, sp)
-    sig_ref = [score.ridge_scatter_ref(r_.t_s, r_.f_hz, sp.ridge_decimate_s) for r_ in ridges_]
-    abs_fit = score.absolute_fit_status(surv[0]["rms"], sig_ref, sp) if surv else None
-    status = "none" if not surv else ("inconsistent" if abs_fit["inconsistent"] else amb["status"])
+    if sp.ambiguity_mode == "v2":
+        # P1.4 (comparison arm): Δnll tie set + assignment gap, locus, and the χ² absolute fit with P1.1's σ
+        amb = score.ambiguity_v2([d["score"] for d in surv], [d["xyz_est"] for d in surv],
+                                 [sum(k_ < 0 for k_ in d["tracks"]) for d in surv],
+                                 [tuple(str(ts.icao24[k_]) if k_ >= 0 else "" for k_ in d["tracks"]) for d in surv],
+                                 sum(k_ >= 0 for k_ in surv[0]["tracks"]) if surv else 0, sp)
+        abs_fit = (score.gof_status(ridges_, ts, surv[0]["xyz_est"], surv[0]["tracks"], surv[0]["dt_s"],
+                                    prior.start_s, c, sp) if surv else None)
+        status = ("none" if not surv else "locus" if amb["status"] == "locus"
+                  else "inconsistent" if abs_fit["inconsistent"] else amb["status"])
+    else:
+        amb = score.ambiguity([d["score"] for d in surv], [d["xyz_est"] for d in surv], sp,
+                              [sum(k_ < 0 for k_ in d["tracks"]) for d in surv])
+        # Run status (P0.4, provisional): the ambiguity status, overridden by "inconsistent" when the rank-1
+        # hypothesis fits some matched event far worse than that event's model-free ridge scatter.
+        sig_ref = [score.ridge_scatter_ref(r_.t_s, r_.f_hz, sp.ridge_decimate_s) for r_ in ridges_]
+        abs_fit = score.absolute_fit_status(surv[0]["rms"], sig_ref, sp) if surv else None
+        status = "none" if not surv else ("inconsistent" if abs_fit["inconsistent"] else amb["status"])
+    tied_ids = {surv[k_]["cell_id"] for k_ in amb["tied"]}
     timings["score_s"] = _time.perf_counter() - t
     timings["n_hypotheses_scored"] = n_scored
     # Truth evaluation
@@ -1122,8 +1133,10 @@ def write_outputs(res: LocateResult, args, T0: float) -> int:
         "human_in_loop": False, "manual_inputs": manual_inputs(cfg, events_prov),
         "variant": cfg.get("variant"), "config_provenance": config_provenance(cfg, args.config),
         "events_provenance": events_prov,
-        "milestone": 5, "score": {"definition": "pooled mean Huber loss of ridge residuals in ridge-scatter units; "
-                                                "one shared Δt, one f0 per event; lower is better; "
+        "milestone": 5, "score": {"definition": ("calibrated negative log-likelihood in nats (P1.1 arm); "
+                                                 if sp.likelihood == "calibrated" else
+                                                 "pooled mean Huber loss of ridge residuals in ridge-scatter units; ")
+                                                + "one shared Δt, one f0 per event; lower is better; "
                                                 "cell score = best point inside the cell when score.refine_in_cell",
                                   "interim_columns": "interim_rank/interim_cost = cascade consistency, for comparison"},
         "inputs": {"audio": audio_path, "tracks": tracks_path, "registry": registry, "truth": truth_path,
@@ -1232,13 +1245,16 @@ def ablation_plan(name: str) -> list[tuple[str, str, int]]:
         rows += [("C", c_, k) for c_ in ("set:corridor_frac=1", "sub:corridor", "sub:twins", "sub:reflection")
                  for k in range(10)]
         return rows
+    if name == "stageA_ext":
+        # U18 acceptance (plan §8.5): all-on C seeds 50-99, so that with Stage A's 0-49 every arm has n = 100
+        return [("C", "all", k) for k in range(50, 100)]
     if name == "stageB":
         rows = []
         for sc in ("A", "G"):
             rows += [(sc, "all", k) for k in range(20)] + [(sc, c_, k) for c_ in loo for k in range(10)]
             rows += [(sc, "clean", k) for k in range(3)]
         return rows
-    raise SystemExit(f"unknown ablation plan {name!r} (smoke, pilot, stageA, stageB)")
+    raise SystemExit(f"unknown ablation plan {name!r} (smoke, pilot, stageA, stageA_ext, stageB)")
 
 
 def realism_for(cfg: dict, spec: str):
@@ -1764,7 +1780,7 @@ def main(argv=None) -> int:
 
     a = sub.add_parser("ablate", help="paired leave-one-group-out ablation (rows.jsonl + summary), disk-safe")
     a.add_argument("--config", default="config.yaml")
-    a.add_argument("--plan", default="pilot", help="pilot | stageA | stageB")
+    a.add_argument("--plan", default="pilot", help="pilot | stageA | stageA_ext | stageB")
     a.add_argument("--variants", default="V0,V1", help="comma list: V0, V1 (config variants), "
                                                           "V0-asdesigned, V1-asdesigned (needs --asdesigned-dir)")
     a.add_argument("--out", default="outputs/ablation/pilot")

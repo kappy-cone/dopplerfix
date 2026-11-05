@@ -26,6 +26,42 @@ synthetic data.
 Unchanged existing caps used by the new enumeration: `score.max_hypotheses_per_cell` 64 (now the fully
 matched cap; partial hypotheses have their own cap above).
 
+## Phase 1: P1.1 calibrated likelihood and P1.4 ambiguity v2 (session 5, before the U18 measurement)
+
+Registered before any measurement that uses them (unit tests on synthetic ridges excepted, which check the
+implementation, not a target). They act only in the comparison arms V1c / V0c (`score.likelihood: calibrated`,
+`score.ambiguity_mode: v2`); V0 / V1 are unchanged. The plan names some of these `ambiguity.*` and
+`score.adsb_budget`; there is no `ambiguity` config section, so they live under `score` with the names below.
+
+| Knob (config key) | Value | Source | Status | Sensitivity grid | Used by |
+|---|---|---|---|---|---|
+| `score.likelihood` | huber (V0, V1); calibrated (V1c, V0c) | plan P1.1 / U1 (arm only) | mode, not a threshold | — | `score._hyp_cost` |
+| `score.outlier_frac` (ε) | 0.05 | arbitrary (plan P0.7 table) | PROVISIONAL | 0.01, 0.05, 0.2 | `score._event_nll` |
+| `score.adsb_pos_m` | 7 | DO-260B NACp class (plan P0.7 `score.adsb_budget`) | PROVISIONAL | ×0.5, ×1, ×2 (jointly with the two below) | `score._ridge_sigma2` |
+| `score.adsb_speed_mps` | 0.26 | 1 kt quantization / 2 (plan P0.7) | PROVISIONAL | ×0.5, ×1, ×2 | `score._ridge_sigma2` |
+| `score.adsb_latency_s` | 0.5 | OpenSky latency literature (plan P0.7) | PROVISIONAL | ×0.5, ×1, ×2 | `score._ridge_sigma2` |
+| `score.sigma_inflation_cap` | 3 | plan P1.1 ("capped at 3×"); arbitrary | PROVISIONAL | 2, 3, 5 | `score._event_nll` |
+| `score.ambiguity_mode` | v1 (V0, V1); v2 (V1c, V0c) | plan P1.4 (S7, delegated) | mode | — | `cli.run_locate` |
+| `score.tie_quantile` | 0.95 (2·Δnll ≤ χ²₂ → Δnll ≤ 3.00 nats) | statistics (plan P0.7 `ambiguity.tie_quantile`) | PROVISIONAL | 0.9, 0.95, 0.99 | `score.ambiguity_v2` |
+| `score.gof_quantile` | 0.99 per event | statistics (plan P0.7 `ambiguity.gof_quantile`) | PROVISIONAL | 0.95, 0.99, 0.999 | `score.gof_status` |
+| `score.ambiguity_radius_m` (existing) | 400 | unchanged (session 3) | PROVISIONAL | — | `score.ambiguity_v2` |
+
+Implementation choices inside P1.1 (no new knob, recorded so they are not mistaken for tuning):
+- **Effective N.** The plan says "from the residual autocorrelation (`fit.correlation_factor`)". Taking it from
+  each hypothesis' own residuals would reward bad fits: systematic misfit makes residuals correlated, so a
+  larger κ divides the cost more. κ is therefore hypothesis-independent: (1 + ρ₁)/(1 − ρ₁) with ρ₁ the AR(1)
+  lag-1 correlation of the decimated ridge, solved model-free in `score.ridge_white_stats` (the same estimator
+  as P0.4's σ_ref; ρ₁ ≤ 0.95). The characterization fit's own factor is on raw, overlapping spectrogram
+  points, not on the scorer's decimated points.
+- **σ_e** is the hypothesis' residual RMS kept within [σ_white, 3·σ_white] (plan). The per-point term is a
+  normalised density, so a larger σ pays ln σ; this is a profile likelihood, not a free inflation.
+- **ADS-B budget mapped to frequency:** speed error → f·δv/c; latency and the along-track part of the position
+  error (δp / v, v = the event's fitted speed) → ḟ·δt. Cross-track position error is neglected (second order).
+- **B** (outlier density width) is the ridge search band from the ridge extractor (`ridge.band_hz`).
+- **Unmatched event** (V1c): every point costs −ln(ε/B) (κ = 1). Ranking stays lexicographic (U8).
+- **Silence** (V1c): the probabilistic-silence penalty is added in nats, not per point.
+- **f0** is profiled as in the Huber loss (IRLS, k = `huber_k`, at σ_white), not re-maximised under the mixture.
+
 ## Later phases
 
 These entries are listed in plan P0.7 and are added to config.yaml only when their item is built:

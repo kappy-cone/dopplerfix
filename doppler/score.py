@@ -41,6 +41,17 @@ class ScoreParams:
                                            # model-free ridge scatter -> status "inconsistent" (diagnostic)
     allow_shared_tracks: bool = False      # same aircraft assigned to two events (also used by the cascade)
     max_hypotheses_per_cell: int = 64
+    # P1.1 calibrated likelihood (a comparison arm; "huber" keeps the step-8 pooled Huber loss). Values: registry.
+    likelihood: str = "huber"              # huber | calibrated
+    outlier_frac: float = 0.05             # ε: per-point outlier mixture weight (uniform over the ridge band)
+    adsb_pos_m: float = 7.0                # ADS-B budget: position (DO-260B NACp class)
+    adsb_speed_mps: float = 0.26           # ADS-B budget: speed (1 kt quantization / 2)
+    adsb_latency_s: float = 0.5            # ADS-B budget: timestamp latency
+    sigma_inflation_cap: float = 3.0       # σ_e from the hypothesis' own residuals, within [σ_white, cap·σ_white]
+    # P1.4 ambiguity v2 (with the calibrated likelihood: Δnll in nats)
+    ambiguity_mode: str = "v1"             # v1 (relative score) | v2 (Δnll tie set, assignment gap, gof, locus)
+    tie_quantile: float = 0.95             # tied if 2·Δnll ≤ χ²₂ quantile
+    gof_quantile: float = 0.99             # "inconsistent" if an event's χ² exceeds this χ²(N_eff) quantile
 
     @classmethod
     def from_dict(cls, d: dict) -> "ScoreParams":
@@ -74,6 +85,11 @@ class RidgeObs:
     t_s: NDArray
     f_hz: NDArray
     sigma_hz: float
+    # calibrated likelihood (P1.1) only; unused by the Huber loss
+    sigma_white_hz: float = float("nan")   # model-free scatter of the decimated ridge (floored at sigma_floor_hz)
+    kappa: float = 1.0                     # effective-N factor (1 + ρ₁)/(1 − ρ₁), hypothesis-independent
+    band_hz: float = float("nan")          # width of the frequency band the ridge was searched in
+    v_mps: float = float("nan")            # the event's fitted speed (position budget -> time-equivalent error)
 
 
 def prepare_ridges(events: Sequence[ObservedEvent], p: ScoreParams) -> list[RidgeObs]:
@@ -92,7 +108,16 @@ def prepare_ridges(events: Sequence[ObservedEvent], p: ScoreParams) -> list[Ridg
         ff = np.array([np.median(f[inv == k]) for k in range(len(ub))])
         w = np.median(e.ridge_w) if len(e.ridge_w) else 1.0
         sig = max(float(1.0 / np.sqrt(w)) if w > 0 else 1.0, p.sigma_floor_hz)
-        out.append(RidgeObs(tt, ff, sig))
+        extra = {}
+        if p.likelihood == "calibrated":
+            sw, rho = ridge_white_stats(t, f, p.ridge_decimate_s)
+            band = getattr(e, "band_hz", None)
+            width = (float(band[1] - band[0]) if band is not None and band[1] > band[0]
+                     else float(ff.max() - ff.min()) + 10.0 * sig)     # no band recorded (tests): ridge span + 10σ
+            extra = {"sigma_white_hz": max(sw, p.sigma_floor_hz) if np.isfinite(sw) else sig,
+                     "kappa": (1.0 + rho) / (1.0 - rho) if np.isfinite(rho) else 1.0,
+                     "band_hz": max(width, 10.0 * sig), "v_mps": float(e.v_mps)}
+        out.append(RidgeObs(tt, ff, sig, **extra))
     return out
 
 
@@ -174,13 +199,81 @@ def profile_f0(f_obs: NDArray, ratio: NDArray, w: NDArray | None = None) -> floa
     return float(np.sum(w[m] * f_obs[m] * ratio[m]) / den) if den > 0 else float("nan")
 
 
+def _ridge_sigma2(rd: RidgeObs, model: NDArray, ratio: NDArray, c: float, p: ScoreParams) -> tuple[NDArray, NDArray]:
+    """(σ_white², σ_model²) per point: the model-free ridge scatter and the ADS-B budget mapped to frequency.
+
+    The budget: a ground-speed error δv changes the radial velocity by δv·cos θ (cos θ = ṙ/v, ṙ = c(1/R − 1)
+    from the ratio R), so the frequency by f0·R²·δv·|cos θ|/c; a timestamp latency, and the along-track part of a
+    position error (as δp / v), shift the curve in time by δt, i.e. by ḟ·δt. Cross-track position error is
+    neglected (it changes only the curve's width, at second order).
+    """
+    v = max(rd.v_mps if np.isfinite(rd.v_mps) else 50.0, 1.0)
+    fdot = np.gradient(np.where(np.isfinite(model), model, 0.0), rd.t_s, axis=-1) if model.shape[-1] > 1 \
+        else np.zeros_like(model)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        cos_t = np.clip(np.abs(c * (1.0 / ratio - 1.0)) / v, 0.0, 1.0)
+    t_err2 = p.adsb_latency_s ** 2 + (p.adsb_pos_m / v) ** 2
+    s_model2 = (model * ratio * p.adsb_speed_mps * cos_t / c) ** 2 + fdot ** 2 * t_err2
+    return np.full(model.shape, rd.sigma_white_hz ** 2), np.where(np.isfinite(s_model2), s_model2, 0.0)
+
+
+def _event_nll(rd: RidgeObs, ratio: NDArray, c: float, p: ScoreParams):
+    """P1.1 calibrated per-event negative log-likelihood (nats) along the last axis; same returns as _event_cost.
+
+    Per point: −ln(ε/B + (1 − ε)·N(r; 0, s²)) with s² = σ_e² + σ_model², a proper density in Hz (B = ridge band
+    width, so both mixture terms are densities); an unmodellable point costs −ln(ε/B). σ_e is the hypothesis' own
+    residual RMS, kept within [σ_white, cap·σ_white]. The event's sum is divided by the hypothesis-independent
+    effective-N factor κ. f0 is profiled as in the Huber loss (IRLS at σ_white).
+    """
+    f = rd.f_hz
+    ok = np.isfinite(ratio)
+    R = np.where(ok, ratio, 0.0)
+    F = np.broadcast_to(f, R.shape)
+    w = ok.astype(float)
+    sw = rd.sigma_white_hz
+    f0 = np.sum(w * F * R, -1) / np.maximum(np.sum(w * R * R, -1), 1e-12)
+    for _ in range(3):
+        a = np.abs(F - f0[..., None] * R) / sw
+        w = np.where(ok, np.where(a <= p.huber_k, 1.0, p.huber_k / np.maximum(a, 1e-12)), 0.0)
+        f0 = np.sum(w * F * R, -1) / np.maximum(np.sum(w * R * R, -1), 1e-12)
+    model = np.where(ok, f0[..., None] * R, np.nan)
+    r = np.where(ok, F - f0[..., None] * R, 0.0)
+    n_ok = np.maximum(ok.sum(-1), 1)
+    rms = np.sqrt(np.sum(r ** 2, -1) / n_ok)
+    # robust (MAD) scale, so an outlier point costs only its own term instead of widening every point's density
+    if ok.all():
+        mad = 1.4826 * np.median(np.abs(r), -1)
+    else:
+        import warnings
+
+        with warnings.catch_warnings():                    # a Δt with no modellable point: scale -> σ_white
+            warnings.simplefilter("ignore", RuntimeWarning)
+            mad = 1.4826 * np.nan_to_num(np.nanmedian(np.where(ok, np.abs(r), np.nan), -1), nan=0.0)
+    sig_e = np.clip(mad, sw, p.sigma_inflation_cap * sw)
+    _, s_model2 = _ridge_sigma2(rd, model, np.where(ok, ratio, np.nan), c, p)
+    s2 = sig_e[..., None] ** 2 + np.where(ok, s_model2, 0.0)
+    eps, B = p.outlier_frac, rd.band_hz
+    dens = eps / B + (1.0 - eps) * np.exp(-0.5 * r ** 2 / s2) / np.sqrt(2.0 * np.pi * s2)
+    point = np.where(ok, -np.log(dens), -np.log(eps / B))
+    miss = (~ok).sum(-1)
+    return point.sum(-1) / rd.kappa, f0, rms, miss
+
+
+def _unmatched_nll(rd: RidgeObs, p: ScoreParams) -> float:
+    """An event left without a track: every point is "unmodellable", −ln(ε/B) each (κ = 1)."""
+    return float(len(rd.t_s) * -np.log(p.outlier_frac / rd.band_hz))
+
+
 def _hyp_cost(dts: NDArray, ridges: list[RidgeObs], tracks: tuple[int, ...], xyz: NDArray, ts: TrackSet,
-              start_s: float, c: float, k: float):
+              start_s: float, c: float, k: float, p: ScoreParams | None = None):
     """Pooled cost for each Δt in ``dts`` (G,), every event sharing that Δt. Returns per-event arrays (N, G).
 
-    An event with track −1 (unmatched) contributes nothing here; hypotheses are ranked lexicographically
-    by (number of unmatched events, cost), see CellScore.rank_key.
+    An event with track −1 (unmatched) contributes nothing here under the Huber loss; hypotheses are ranked
+    lexicographically by (number of unmatched events, cost), see CellScore.rank_key. With the calibrated
+    likelihood (``p.likelihood == "calibrated"``) costs are nats and an unmatched event costs its points as
+    unmodellable.
     """
+    cal = p is not None and p.likelihood == "calibrated"
     N, G = len(ridges), len(dts)
     cost = np.zeros((N, G))
     f0 = np.zeros((N, G))
@@ -191,11 +284,22 @@ def _hyp_cost(dts: NDArray, ridges: list[RidgeObs], tracks: tuple[int, ...], xyz
             continue
         if k_ < 0:
             f0[e], rms[e] = np.nan, np.nan
+            if cal:
+                cost[e] = _unmatched_nll(rd, p)
             continue
         t_rx = start_s + dts[:, None] + rd.t_s[None, :]
         ratio, _, _, _ = modeled_ratio(xyz, k_, ts, t_rx, c)
-        cost[e], f0[e], rms[e], miss[e] = _event_cost(rd.f_hz, ratio, rd.sigma_hz, k)
+        if cal:
+            cost[e], f0[e], rms[e], miss[e] = _event_nll(rd, ratio, c, p)
+        else:
+            cost[e], f0[e], rms[e], miss[e] = _event_cost(rd.f_hz, ratio, rd.sigma_hz, k)
     return cost, f0, rms, miss
+
+
+def _pooled(cost_sum: float, total_points: int, p: ScoreParams) -> float:
+    """Hypothesis cost from the summed per-event cost: the Huber loss is a mean per matched point, the
+    calibrated likelihood a total in nats."""
+    return float(cost_sum) if p.likelihood == "calibrated" else float(cost_sum / total_points)
 
 
 def score_hypothesis(hyp: Hypothesis, ridges: list[RidgeObs], ts: TrackSet, xyz: NDArray, start_time_s: float,
@@ -211,18 +315,18 @@ def score_hypothesis(hyp: Hypothesis, ridges: list[RidgeObs], ts: TrackSet, xyz:
     matched = np.array([k_ >= 0 for k_ in hyp.assignment])
     total = max(int(n_pts[matched].sum()), 1)
     grid = np.arange(lo, hi + 1e-9, p.dt_coarse_step_s) if hi > lo else np.array([lo])
-    cost, *_ = _hyp_cost(grid, ridges, hyp.assignment, xyz, ts, start_time_s, c, p.huber_k)
+    cost, *_ = _hyp_cost(grid, ridges, hyp.assignment, xyz, ts, start_time_s, c, p.huber_k, p)
     j = int(np.argmin(cost.sum(0)))
     a, b = max(lo, grid[j] - p.dt_coarse_step_s), min(hi, grid[j] + p.dt_coarse_step_s)
     best = grid[j]
     if b > a:
         res = minimize_scalar(lambda d: float(_hyp_cost(np.array([d]), ridges, hyp.assignment, xyz, ts,
-                                                        start_time_s, c, p.huber_k)[0].sum()),
+                                                        start_time_s, c, p.huber_k, p)[0].sum()),
                               bounds=(a, b), method="bounded", options={"xatol": 1e-3})
         if res.fun <= cost.sum(0)[j]:
             best = float(res.x)
-    cst, f0, rms, miss = _hyp_cost(np.array([best]), ridges, hyp.assignment, xyz, ts, start_time_s, c, p.huber_k)
-    return CellScore(hyp.cell_id, tuple(hyp.assignment), float(best), f0[:, 0], float(cst[:, 0].sum() / total),
+    cst, f0, rms, miss = _hyp_cost(np.array([best]), ridges, hyp.assignment, xyz, ts, start_time_s, c, p.huber_k, p)
+    return CellScore(hyp.cell_id, tuple(hyp.assignment), float(best), f0[:, 0], _pooled(cst[:, 0].sum(), total, p),
                      cst[:, 0] / np.maximum(n_pts, 1), n_pts, rms[:, 0], miss[:, 0],
                      n_unmatched=int((~matched).sum()))
 
@@ -273,7 +377,8 @@ def refine_in_cell(hyp: Hypothesis, ridges: list[RidgeObs], ts: TrackSet, xyz: N
         return xyz + u[0] * B[0] + u[1] * B[1]
 
     def total_cost(u, dts):
-        return _hyp_cost(np.atleast_1d(dts), ridges, hyp.assignment, pos(u), ts, start_time_s, c, p.huber_k)[0].sum(0)
+        return _hyp_cost(np.atleast_1d(dts), ridges, hyp.assignment, pos(u), ts, start_time_s, c, p.huber_k,
+                         p)[0].sum(0)
 
     starts = []
     dgrid = np.linspace(lo, hi, 13)
@@ -291,8 +396,9 @@ def refine_in_cell(hyp: Hypothesis, ridges: list[RidgeObs], ts: TrackSet, xyz: N
                    options={"eps": 1e-3, "maxiter": 60})
     z = res.x * scale if res.fun <= min(starts, key=lambda q: q[0])[0] else np.r_[u0, d0]
     u, dt = z[:2], float(z[2])
-    cst, f0, rms, miss = _hyp_cost(np.array([dt]), ridges, hyp.assignment, pos(u), ts, start_time_s, c, p.huber_k)
-    sc = CellScore(hyp.cell_id, tuple(hyp.assignment), dt, f0[:, 0], float(cst[:, 0].sum() / total),
+    cst, f0, rms, miss = _hyp_cost(np.array([dt]), ridges, hyp.assignment, pos(u), ts, start_time_s, c, p.huber_k,
+                                   p)
+    sc = CellScore(hyp.cell_id, tuple(hyp.assignment), dt, f0[:, 0], _pooled(cst[:, 0].sum(), total, p),
                    cst[:, 0] / np.maximum(n_pts, 1), n_pts, rms[:, 0], miss[:, 0], n_unmatched=init.n_unmatched)
     if sc.cost > init.cost:                              # never worse than the centre
         return init, np.zeros(2), xyz
@@ -339,7 +445,9 @@ def rank_cells(events: Sequence[ObservedEvent], cells: Sequence[tuple], ts: Trac
     """
     ridges = prepare_ridges(events, p)
     total = max(int(sum(len(r.t_s) for r in ridges)), 1)
-    pen = {cl[0]: (float(cl[3]) if len(cl) > 3 else 0.0) * p.silence_weight / total for cl in cells}
+    # probabilistic-silence penalty: per point under the Huber loss (a mean), in nats under the calibrated one
+    per = 1.0 if p.likelihood == "calibrated" else total
+    pen = {cl[0]: (float(cl[3]) if len(cl) > 3 else 0.0) * p.silence_weight / per for cl in cells}
     out = []
     for cell_id, xyz, hyps, *_ in cells:
         scs = [score_hypothesis(h, ridges, ts, xyz, start_time_s, c, p, dt_prior) for h in hyps]
@@ -379,6 +487,67 @@ def ambiguity(scores: Sequence[float], xyz: Sequence[NDArray], p: ScoreParams,
             "gap_ratio": float(sc[1] / sc[0]) if len(sc) > 1 and sc[0] > 0 else None}
 
 
+def ambiguity_v2(nll: Sequence[float], xyz: Sequence[NDArray], n_unmatched: Sequence[int],
+                 assignments: Sequence[tuple], n_matched_rank1: int, p: ScoreParams) -> dict:
+    """P1.4 ambiguity on the calibrated likelihood. Candidates sorted best first (lexicographic rank).
+
+    * ``none``: no candidate.
+    * ``locus``: rank 1 matches a single event (one flyover constrains only a locus).
+    * tie set: candidates with rank 1's unmatched count and nll ≤ nll₁ + χ²₂(tie_quantile)/2.
+    * ``unique`` if the tie set lies within ambiguity_radius_m of rank 1 and holds no other assignment
+      (the assignment gap: the best different assignment is outside the tie set); else ``ambiguous``.
+    """
+    from scipy.stats import chi2
+
+    sc = np.asarray(nll, float)
+    if len(sc) == 0:
+        return {"status": "none", "n_tied": 0, "tied": [], "spread_m": None, "gap_ratio": None,
+                "dnll_tie": None, "assignment_gap_nll": None}
+    nu = np.asarray(n_unmatched, int)
+    dnll = float(chi2.ppf(p.tie_quantile, 2) / 2.0)
+    same = nu == nu[0]
+    tied = np.flatnonzero(same & (sc <= sc[0] + dnll))
+    X = np.asarray([xyz[k] for k in tied], float)
+    spread = float(np.max(np.linalg.norm(X - X[0], axis=1))) if len(X) else 0.0
+    other = [k for k in np.flatnonzero(same) if tuple(assignments[k]) != tuple(assignments[0])]
+    gap = float(sc[other[0]] - sc[0]) if other else None
+    other_tied = any(tuple(assignments[k]) != tuple(assignments[0]) for k in tied)
+    if n_matched_rank1 <= 1:
+        status = "locus"
+    else:
+        status = "unique" if spread <= p.ambiguity_radius_m and not other_tied else "ambiguous"
+    return {"status": status, "n_tied": int(len(tied)), "tied": tied.tolist(), "spread_m": spread,
+            "gap_ratio": None, "dnll_tie": dnll, "assignment_gap_nll": gap}
+
+
+def gof_status(ridges: list[RidgeObs], ts: TrackSet, xyz: NDArray, assignment: Sequence[int], dt_s: float,
+               start_time_s: float, c: float, p: ScoreParams) -> dict:
+    """P1.4 absolute fit with the P1.1 σ: per matched event, T = Σ r²/(σ_white² + σ_model²)/κ against χ²(n/κ).
+
+    The scale here is the model-free one (not the hypothesis' own inflated σ_e), so a systematic misfit shows.
+    ``inconsistent`` if any event's T exceeds the χ² ``gof_quantile``. A status, never a ranking rule.
+    """
+    from scipy.stats import chi2
+
+    out = {"inconsistent": False, "chi2": [], "dof": [], "p": []}
+    for rd, k_ in zip(ridges, assignment):
+        if k_ < 0 or len(rd.t_s) == 0:
+            out["chi2"].append(None), out["dof"].append(None), out["p"].append(None)
+            continue
+        ratio, _, _, _ = modeled_ratio(xyz, k_, ts, start_time_s + dt_s + rd.t_s, c)
+        _, f0, _, _ = _event_nll(rd, ratio[None, :], c, p)
+        ok = np.isfinite(ratio)
+        model = np.where(ok, f0[0] * ratio, np.nan)
+        sw2, sm2 = _ridge_sigma2(rd, model[None, :], ratio[None, :], c, p)
+        r = rd.f_hz[ok] - model[ok]
+        T = float(np.sum(r ** 2 / (sw2[0][ok] + sm2[0][ok])) / rd.kappa)
+        dof = max(float(ok.sum()) / rd.kappa, 1.0)
+        pv = float(chi2.sf(T, dof))
+        out["chi2"].append(T), out["dof"].append(dof), out["p"].append(pv)
+        out["inconsistent"] |= pv < 1.0 - p.gof_quantile
+    return out
+
+
 def ridge_scatter_ref(t_s: NDArray, f_hz: NDArray, decimate_s: float = 0.5) -> float:
     """Model-free ridge scatter σ_ref (Hz) for the absolute-fit check (P0.4).
 
@@ -386,17 +555,26 @@ def ridge_scatter_ref(t_s: NDArray, f_hz: NDArray, decimate_s: float = 0.5) -> f
     (lag-1 correlation ρ) var(Δ²f) = σ²(6 − 8ρ + 2ρ²) and the lag-1 autocorrelation of Δ²f is
     (−4 + 7ρ − 4ρ² + ρ³)/(6 − 8ρ + 2ρ²); ρ is solved from the observed value and σ follows. Robust (MAD) scale.
     """
+    return ridge_white_stats(t_s, f_hz, decimate_s)[0]
+
+
+def ridge_white_stats(t_s: NDArray, f_hz: NDArray, decimate_s: float = 0.5) -> tuple[float, float]:
+    """(σ_white, ρ₁) of the decimated ridge, model-free (see ridge_scatter_ref); (NaN, NaN) if too short.
+
+    ρ₁ is the AR(1) lag-1 correlation solved on a 0–0.95 grid, so the effective-N factor (1 + ρ)/(1 − ρ)
+    that P1.1 derives from it is hypothesis-independent.
+    """
     t, f = np.asarray(t_s, float), np.asarray(f_hz, float)
     ok = np.isfinite(t) & np.isfinite(f)
     t, f = t[ok], f[ok]
     if len(t) < 8:
-        return float("nan")
+        return float("nan"), float("nan")
     b = np.floor((t - t.min()) / decimate_s).astype(np.int64)
     ub, inv = np.unique(b, return_inverse=True)
     fd = np.array([np.median(f[inv == k]) for k in range(len(ub))])
     d2 = np.diff(fd, 2)
     if len(d2) < 6:
-        return float("nan")
+        return float("nan"), float("nan")
     mad = 1.4826 * np.median(np.abs(d2 - np.median(d2)))
     x = d2 - d2.mean()
     r1_obs = float(np.sum(x[1:] * x[:-1]) / max(np.sum(x * x), 1e-12))
@@ -404,7 +582,7 @@ def ridge_scatter_ref(t_s: NDArray, f_hz: NDArray, decimate_s: float = 0.5) -> f
     den = 6 - 8 * rho + 2 * rho ** 2
     r1 = (-4 + 7 * rho - 4 * rho ** 2 + rho ** 3) / den
     k = int(np.argmin(np.abs(r1 - r1_obs)))
-    return float(mad / np.sqrt(den[k]))
+    return float(mad / np.sqrt(den[k])), float(rho[k])
 
 
 def absolute_fit_status(rms_hz: Sequence[float], sigma_ref_hz: Sequence[float], p: ScoreParams) -> dict:

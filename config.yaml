@@ -193,6 +193,12 @@ variants:
   V0:                        # original strict design (milestones 4-5): every event matched, hard silence
     cascade: {max_unmatched_events: 0, silence_audibility: hard, weak_event_rel_sigma: null}
   V1: {}                     # current robust default: <= 1 unmatched event (lexicographic), probabilistic silence
+  # P1.1 + P1.4 comparison arms (never defaults; U18 decides): the calibrated likelihood and ambiguity v2
+  V1c:
+    score: {likelihood: calibrated, ambiguity_mode: v2}
+  V0c:
+    cascade: {max_unmatched_events: 0, silence_audibility: hard, weak_event_rel_sigma: null}
+    score: {likelihood: calibrated, ambiguity_mode: v2}
 
 score:                       # locked N-event scoring: one shared Δt, one f0 per event
   dt_coarse_step_s: 0.5      # coarse Δt grid over each hypothesis' feasible interval, then bounded refinement
@@ -210,6 +216,17 @@ score:                       # locked N-event scoring: one shared Δt, one f0 pe
   ambiguity_radius_m: 400.0  # tied set within this of rank 1 -> unique, else ambiguous
   allow_shared_tracks: false # forbid assigning one aircraft to two events
   max_hypotheses_per_cell: 64
+  # P1.1 calibrated likelihood + P1.4 ambiguity v2: comparison arms only (variants V1c/V0c); values and sources
+  # are in reports/apriori_registry.md and were fixed before the first measurement.
+  likelihood: huber          # huber (step 8 as written) | calibrated (P1.1 arm)
+  outlier_frac: 0.05         # PROVISIONAL (arbitrary): ε, per-point outlier mixture weight
+  adsb_pos_m: 7.0            # PROVISIONAL (DO-260B NACp class): ADS-B position budget
+  adsb_speed_mps: 0.26       # PROVISIONAL (1 kt quantization / 2): ADS-B speed budget
+  adsb_latency_s: 0.5        # PROVISIONAL (OpenSky latency literature): ADS-B timestamp budget
+  sigma_inflation_cap: 3.0   # PROVISIONAL (plan P1.1; arbitrary): σ_e within [σ_white, 3·σ_white]
+  ambiguity_mode: v1         # v1 (relative score tie) | v2 (P1.4: Δnll tie set, assignment gap, gof, locus)
+  tie_quantile: 0.95         # PROVISIONAL (statistics): tied if 2·Δnll ≤ χ²₂ quantile
+  gof_quantile: 0.99         # PROVISIONAL (statistics): "inconsistent" if an event's χ²(N_eff) exceeds this quantile
 
 # Validation (doppler/evaluate.py; user decision U10). Fixed now, before any Phase 0 baseline result.
 evaluate:
