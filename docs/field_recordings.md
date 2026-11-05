@@ -75,7 +75,7 @@ Known-time mode needs the recording's UTC start to well under a second. The time
 and the recorder clock are not trusted (CLAUDE.md, clock offset).
 - **Slate each clip at start and end against a reference clock.**
   - Best: record audible UTC time ticks. Options are the NIST telephone time service (Boulder) on speaker,
-    or a WWV shortwave broadcast (Fort Collins).
+    if it is still offered (check first), or a WWV shortwave broadcast (Fort Collins).
   - Otherwise: clap or beep on a full minute while watching an NTP- or GPS-synced clock. Use the phone's
     network time or a GPS time app, and video the clock and the clap together if you can.
 - **Why both ends:** together they measure the recorder's sample-clock drift. Tens of ppm is about 0.1 s per

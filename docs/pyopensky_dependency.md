@@ -57,5 +57,8 @@ permissive (MIT, BSD, Apache-2.0, MPL-2.0 for certifi, tqdm and orjson).
 
 ## Recommendation
 Add pyopensky, pinned, together with the pyarrow switch in one reviewed commit when P4.3 starts. Don't add
-it earlier. The SQL path `query()` keeps OpenSky's raw column names, which `tracks.parse_opensky_states`
-already maps. If the user prefers a lean environment, (b) is the cleanest.
+it earlier. Both `Trino.history()` and `query()` keep OpenSky's raw column names, which
+`tracks.parse_opensky_states` already maps (checked in pyopensky v2.18's source). The traffic library is
+what renames columns and converts units; it is not needed. Results come back with pyarrow-backed dtypes.
+Add a Trino-shaped test (Arrow timestamps, nullable booleans) when pyarrow lands. If the user prefers a
+lean environment, (b) is the cleanest.

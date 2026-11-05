@@ -9,9 +9,10 @@ vertrate) are mapped automatically; other names can be mapped via config.
 OpenSky state vectors (the scientific datasets' hourly CSV, and the Trino table
 ``state_vectors_data4``, which share one schema; docs/opensky_ingest.md) are
 recognised by their time/lastposupdate/lastcontact columns and typed by
-``parse_opensky_states`` (SI units already: m, m/s, deg). Frames renamed by
-traffic/pyopensky (``altitude``, ``groundspeed``, ``vertical_rate``) are refused
-unless mapped explicitly, because their units depend on the library.
+``parse_opensky_states`` (SI units already: m, m/s, deg). pyopensky's Trino
+``query()``/``history()`` keep these raw names. Frames renamed by the traffic
+library (``altitude``, ``groundspeed``, ``vertical_rate``; it converts to ft, kt,
+ft/min) are refused unless mapped explicitly.
 
 Heights are ellipsoidal (ADS-B geometric altitude). Barometric altitude is a
 fallback, flagged per track so later stages can widen tolerances.
@@ -46,8 +47,8 @@ OPENSKY_STATE_COLUMNS = (
 _OPENSKY_NUMERIC = ("lat", "lon", "velocity", "heading", "vertrate", "baroaltitude", "geoaltitude",
                     "lastposupdate", "lastcontact")
 _OPENSKY_FLAGS = ("onground", "alert", "spi")
-# Names used by traffic / pyopensky's history(): their units are not stated by the name (traffic converts
-# to ft, kt and ft/min). Refused unless the caller maps them explicitly.
+# Names used by the traffic library, which renames OpenSky columns and converts to ft, kt and ft/min: their
+# units are not stated by the name. Refused unless the caller maps them explicitly.
 UNIT_AMBIGUOUS_COLUMNS = ("altitude", "groundspeed", "vertical_rate")
 
 
@@ -131,15 +132,38 @@ def tracks_to_frame(tracks: list[Track], frame: LocalFrame) -> pd.DataFrame:
 
 
 def is_opensky_states(df: pd.DataFrame) -> bool:
-    """True for a raw OpenSky state-vector table (before renaming): has time, lastposupdate, lastcontact."""
-    return {"time", "lastposupdate", "lastcontact"} <= {str(c).lower() for c in df.columns}
+    """True for a raw OpenSky state-vector table (before renaming): has ``time`` and ``lastposupdate``.
+
+    ``lastcontact`` is not required, so a query cropped without it is still recognised.
+    """
+    return {"time", "lastposupdate"} <= {str(c).lower() for c in df.columns}
 
 
 def _flag(s: pd.Series) -> pd.Series:
-    """OpenSky boolean flags as read from CSV ('true'/'false', 1/0, blank) -> bool (blank = False)."""
-    if pd.api.types.is_bool_dtype(s):
-        return s.astype(bool)
+    """OpenSky boolean flags as read from CSV ('true'/'false', 1/0, blank) -> bool (blank or null = False)."""
+    if pd.api.types.is_bool_dtype(s):                     # incl. nullable / Arrow booleans with nulls
+        return s.fillna(False).astype(bool)
     return s.astype(str).str.strip().str.lower().isin(["true", "t", "1", "1.0"])
+
+
+_MAX_EPOCH_S = 1e11   # ~year 5100: larger "seconds" are milliseconds or nanoseconds
+
+
+def _to_epoch_s(s: pd.Series, name: str) -> pd.Series:
+    """Epoch seconds from numbers, datetimes or ISO-8601 strings (naive = UTC). Raises if unparseable
+    or if numbers look like ms/ns, rather than letting a wrong time through as NaN or 1.6e18 s."""
+    if pd.api.types.is_datetime64_any_dtype(s):
+        ts = pd.to_datetime(s, utc=True)
+    else:
+        num = pd.to_numeric(s, errors="coerce")
+        if num.notna().sum() == s.notna().sum():
+            num = num.astype(float)
+            if (num.abs() > _MAX_EPOCH_S).any():
+                raise ValueError(f"OpenSky column {name!r}: values up to {num.abs().max():.3g} are not epoch "
+                                 "seconds (milliseconds or nanoseconds?)")
+            return num
+        ts = pd.to_datetime(s, utc=True, format="ISO8601")
+    return (ts - pd.Timestamp(0, tz="UTC")).dt.total_seconds()
 
 
 def _squawk(s: pd.Series) -> pd.Series:
@@ -165,10 +189,11 @@ def parse_opensky_states(df: pd.DataFrame) -> pd.DataFrame:
     missing = [c for c in ("time", "icao24", "lat", "lon") if c not in out.columns]
     if missing or not ({"geoaltitude", "baroaltitude"} & set(out.columns)):
         raise ValueError(f"not an OpenSky state-vector table: missing {missing or ['geoaltitude/baroaltitude']}")
-    if not pd.api.types.is_datetime64_any_dtype(out["time"]):
-        out["time"] = pd.to_numeric(out["time"], errors="coerce")
-    for c in _OPENSKY_NUMERIC:
+    for c in ("time", "lastposupdate", "lastcontact"):
         if c in out.columns:
+            out[c] = _to_epoch_s(out[c], c)
+    for c in _OPENSKY_NUMERIC:
+        if c in out.columns and c not in ("lastposupdate", "lastcontact"):
             out[c] = pd.to_numeric(out[c], errors="coerce").astype(float)
     for c in _OPENSKY_FLAGS:
         if c in out.columns:
@@ -179,12 +204,12 @@ def parse_opensky_states(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _check_units(df: pd.DataFrame, aliases: dict | None) -> None:
-    """Refuse traffic/pyopensky-renamed frames whose altitude/speed units are not known."""
+    """Refuse traffic-renamed frames (altitude, groundspeed, vertical_rate) whose units are not known."""
     explicit = {str(k).lower() for k in (aliases or {})}
     bad = [c for c in df.columns if str(c).lower() in UNIT_AMBIGUOUS_COLUMNS and str(c).lower() not in explicit]
     if bad:
         raise ValueError(
-            f"columns {bad} have no stated units (traffic/pyopensky rename OpenSky columns and may convert "
+            f"columns {bad} have no stated units (the traffic library renames OpenSky columns and converts "
             "to ft, kt, ft/min). Use the raw OpenSky names (geoaltitude, velocity, vertrate; m, m/s), or "
             "convert to the canonical SI columns and map them via tracks.columns.")
 
@@ -197,8 +222,9 @@ def normalize_frame(df: pd.DataFrame, aliases: dict | None = None) -> pd.DataFra
     if is_opensky_states(df):
         df = parse_opensky_states(df)
     _check_units(df, aliases)
-    amap = {**DEFAULT_ALIASES, **(aliases or {})}
-    df = df.rename(columns={c: amap.get(c, amap.get(c.lower(), c)) for c in df.columns}).copy()
+    # alias keys match column names case-insensitively (as _check_units does); user aliases win
+    amap = {str(k).lower(): v for k, v in {**DEFAULT_ALIASES, **(aliases or {})}.items()}
+    df = df.rename(columns={c: amap.get(str(c).lower(), c) for c in df.columns}).copy()
     for col in TRACK_COLUMNS:
         if col not in df.columns:
             df[col] = np.nan if col not in ("icao24", "callsign") else ""

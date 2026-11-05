@@ -15,7 +15,6 @@ from doppler import tracks
 
 HEADER = ("time,icao24,lat,lon,velocity,heading,vertrate,callsign,onground,alert,spi,squawk,"
           "baroaltitude,geoaltitude,lastposupdate,lastcontact")
-assert tuple(HEADER.split(",")) == tracks.OPENSKY_STATE_COLUMNS
 SAMPLE = HEADER + """
 1656331200,a1b2c3,,,60.0,90.0,0.0,N123AB  ,False,False,False,0123,,,,1656331199.8
 1656331210,a1b2c3,40.0394,-105.2400,60.0,90.0,0.0,N123AB  ,False,False,False,0123,2400.0,2430.0,1656331209.6,1656331209.9
@@ -122,3 +121,65 @@ def test_traffic_style_names_are_refused_without_explicit_units():
 def test_missing_position_columns_raise():
     with pytest.raises(ValueError, match="not an OpenSky"):
         tracks.parse_opensky_states(_csv().drop(columns=["lat"]))
+
+
+def test_sample_header_is_the_documented_schema():
+    assert tuple(HEADER.split(",")) == tracks.OPENSKY_STATE_COLUMNS
+
+
+def test_canonical_and_synthetic_frames_are_not_opensky():
+    """The negative guarantee V0/V1 rely on: synthetic/ablation frames never take the OpenSky path."""
+    from doppler.geo import LocalFrame
+
+    frame = LocalFrame(40.0394, -105.2258, 1600.0)
+    t = 1656331200.0 + np.arange(0, 60, 1.0)
+    enu = np.c_[60 * t - 60 * t[0], np.zeros_like(t), np.full_like(t, 800.0)]
+    canon = tracks.tracks_to_frame([tracks.Track.from_enu("abc123", "S1", t, enu, frame)], frame)
+    for df in (canon, pd.read_csv(io.StringIO(canon.to_csv(index=False)))):   # in memory and after CSV
+        assert not tracks.is_opensky_states(df)
+        n = tracks.normalize_frame(df)
+        assert not n["onground"].any()
+        np.testing.assert_allclose(n["t_s"].to_numpy(), t)
+
+
+def test_crop_without_lastcontact_is_still_recognised():
+    df = _csv().drop(columns=["lastcontact"])
+    assert tracks.is_opensky_states(df)
+    assert tracks.parse_opensky_states(df)["squawk"].iloc[0] == "0123"
+    np.testing.assert_array_equal(_by_icao(tracks.tracks_from_frame(df))["a1b2c3"].t_s, A_LPU)
+
+
+def test_iso_and_datetime_times_become_epoch_seconds():
+    raw = _csv()
+    iso = raw.assign(time=pd.to_datetime(raw["time"], unit="s", utc=True).astype(str))   # '2022-06-27 12:00:00+00:00'
+    dt = raw.assign(time=pd.to_datetime(raw["time"], unit="s", utc=True),
+                    lastposupdate=pd.to_datetime(raw["lastposupdate"], unit="s", utc=True))
+    want = tracks.parse_opensky_states(raw)
+    for df in (iso, dt):
+        got = tracks.parse_opensky_states(df)
+        np.testing.assert_allclose(got["time"], want["time"])
+        np.testing.assert_allclose(got["lastposupdate"], want["lastposupdate"], atol=1e-3)   # NaN where blank
+    # rows without a position time fall back to the snapshot time, which must stay a real time, not NaN
+    n = tracks.normalize_frame(iso)
+    assert n["t_s"].notna().all()
+
+
+def test_epoch_values_in_milliseconds_are_refused():
+    raw = _csv()
+    with pytest.raises(ValueError, match="epoch"):
+        tracks.parse_opensky_states(raw.assign(lastposupdate=raw["lastposupdate"] * 1000))
+
+
+def test_nullable_boolean_flags_with_nulls():
+    raw = _csv()
+    flags = pd.array([True, None] + [False] * (len(raw) - 2), dtype="boolean")
+    got = tracks.parse_opensky_states(raw.assign(onground=flags))["onground"]
+    assert got.dtype == bool and got.tolist()[:3] == [True, False, False]
+
+
+def test_alias_keys_match_case_insensitively():
+    df = tracks.normalize_frame(_csv())
+    renamed = pd.DataFrame({"time": df["t_s"], "icao24": df["icao24"], "lat": df["lat"], "lon": df["lon"],
+                            "altitude": df["baro_alt_m"]})
+    n = tracks.normalize_frame(renamed, aliases={"Altitude": "baro_alt_m"})   # guard passes and alias applies
+    np.testing.assert_array_equal(n["baro_alt_m"].to_numpy(), df["baro_alt_m"].to_numpy())

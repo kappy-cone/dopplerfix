@@ -5,7 +5,9 @@ datasets at https://opensky-network.org/data/scientific are the fallback (HANDOF
 downloaded without the user's approval** (U14).
 
 ## 1. What the page offers (read 2026-11-04)
-Eleven datasets are listed. Three are relevant here.
+The page refuses scripted fetches (HTTP 403), so it was read once in a browser on 2026-11-04. The claims
+in this section's table come from that reading. A script can't re-check them: re-read the page before
+relying on them. Eleven datasets are listed. Three are relevant here.
 
 | Dataset | Contents | Relevance |
 |---|---|---|
@@ -37,12 +39,14 @@ Re-check the layout and the per-hour size once the folder is populated again, be
 be read today, so read it before any use, and cite OpenSky as it asks.
 
 ## 2. Proposal
-1. **Aircraft metadata: done** (approved and downloaded 2026-11-04; details in §5).
+1. **Aircraft metadata: done.** The user approved this download in session 6 on 2026-11-04. It is not
+   among the items U14 lists, which are the DEM, state vectors and a UAT sample. Details in §5.
    - The registry is `data/aircraft_db.csv`, the path `aircraft_types.registry_path` already names.
    - The type table is `data/doc8643_types.csv`. It is not used until `aircraft_types.type_table_path`
      points at it, which is a config.yaml change for its owner.
 2. **State vectors for any date, including field-recording dates: Trino**, through the user's account, from
-   the `state_vectors_data4` table (one state vector per aircraft per second). It has the same column names
+   the `state_vectors_data4` table (one state vector per aircraft per second, per the archived README's
+   column notes, which are copied from OpenSky's Impala guide). It has the same column names
    as the CSV, so the mapping below applies unchanged. Crop in the SQL to the region bounding box, the time
    window and the columns in §3.
 3. **Fallback for P4.3 / P5.2 only:** one Monday hour of dataset 1, in CSV, not Avro. Avro would need a new
@@ -78,13 +82,26 @@ Units are already SI, so nothing is converted.
 | `squawk`, `alert`, `spi` | kept | – | unused |
 | `serials`, `hour` (Trino only) | kept | – | unused |
 
-**traffic/pyopensky names are refused.** pyopensky's `history()` renames the columns (`altitude`,
-`groundspeed`, `vertical_rate`, `track`, ...), and traffic converts them to ft, kt and ft/min. A frame with
-`altitude`, `groundspeed` or `vertical_rate` raises `ValueError` unless `tracks.columns` maps those columns
-explicitly. Otherwise a feet value could pass silently as metres, because `geoaltitude` keeps its name. Prefer
-pyopensky's raw SQL `query()`, which keeps the OpenSky names.
+**pyopensky keeps the raw names; traffic's names are refused.**
+- **pyopensky 2.18:** `Trino.history()` and `query()` return the `state_vectors_data4` columns under their
+  own names. The only renaming in its Trino module is in `flightlist`. Checked in `src/pyopensky/trino.py`
+  at tag v2.18. So either call maps as above.
+- **Arrow dtypes:** pyopensky converts every result to pyarrow-backed dtypes (`convert_dtypes(dtype_backend=
+  "pyarrow")`), so a time column can arrive as a datetime. `parse_opensky_states` turns datetimes and ISO
+  strings in `time`, `lastposupdate` and `lastcontact` into epoch seconds. It raises on values that look
+  like ms or ns rather than seconds.
+- **The traffic library** renames columns (`altitude`, `groundspeed`, `vertical_rate`, `track`, ...) and
+  converts them to ft, kt and ft/min. A frame with `altitude`, `groundspeed` or `vertical_rate` raises
+  `ValueError` unless `tracks.columns` maps those columns explicitly (alias keys match case-insensitively).
+  Without the guard, a feet value could pass silently as metres, because `geoaltitude` keeps its name.
+- **Detection** needs only `time` and `lastposupdate`. Still keep `lastcontact` in any crop, for diagnosis.
 
-Tests: `tests/test_opensky.py`, on a 14-row hand-made CSV in the documented layout.
+Tests: `tests/test_opensky.py`. It uses a 14-row hand-made CSV in the documented layout, plus edge cases:
+- ISO and datetime times;
+- epoch values in ms;
+- nullable booleans;
+- a crop without `lastcontact`;
+- canonical and synthetic frames, which must not be treated as OpenSky.
 
 ## 4. Caveats for real data
 1. **Velocity time.** In a state vector, `velocity`, `heading` and `vertrate` are the latest values at the
@@ -110,6 +127,10 @@ Tests: `tests/test_opensky.py`, on a 14-row hand-made CSV in the documented layo
    `tracks_from_frame`.
 
 ## 5. Aircraft metadata as downloaded (2026-11-04)
+The counts below were measured on the downloaded and cropped files, which are gitignored and live only on
+the machine that downloaded them. To reproduce them, re-download the files (the MD5s below identify them)
+and repeat the crop.
+
 **Sources** (`s3.opensky-network.org/data-samples/metadata/`; MD5 = S3 ETag, checked):
 
 | File | Size | MD5 | Last modified |
