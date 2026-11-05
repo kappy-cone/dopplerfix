@@ -1,16 +1,31 @@
-# Shared setup for the test jobs in .github/workflows/tests.yml: Python + pinned requirements + geoid grids.
+# Shared setup for .github/workflows/tests.yml: Python, a cached virtualenv with requirements.txt, and the
+# geoid grids in data/proj.
 name: setup-env
-description: Install Python and requirements.txt, and restore (or fetch) the geoid grids into data/proj.
+description: Install Python, restore (or build) the cached .venv, and restore (or fetch) the geoid grids.
 runs:
   using: composite
   steps:
     - uses: actions/setup-python@v7
+      id: py
       with:
         python-version: "3.12"            # the venv's version (requirements.txt header)
-        cache: pip                        # keyed on requirements.txt
-    - name: Install dependencies
+    # The whole virtualenv is cached, keyed on the exact Python and requirements.txt. A hit skips pip
+    # entirely (about 20 s saved); a miss builds it once and saves it for the next runs.
+    - name: Restore virtualenv
+      id: venv
+      uses: actions/cache@v6
+      with:
+        path: .venv
+        key: venv-${{ runner.os }}-${{ runner.arch }}-py${{ steps.py.outputs.python-version }}-${{ hashFiles('requirements.txt') }}
+    - name: Build virtualenv
+      if: steps.venv.outputs.cache-hit != 'true'
       shell: bash
-      run: pip install -r requirements.txt
+      run: |
+        python -m venv .venv
+        .venv/bin/pip install --disable-pip-version-check -q -r requirements.txt
+    - name: Use virtualenv
+      shell: bash
+      run: echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
     # Geoid grids (CLAUDE.md Known pitfalls). tests/test_geo.py skips its grid test without them, so a
     # failed fetch must not fail CI, but it must be visible, and an empty folder must never be cached.
     - name: Restore geoid grids

@@ -364,6 +364,7 @@ def ridge_events(sc, noise_hz=0.1, seed=0):
     return res
 
 
+@pytest.mark.heavy                 # ~15-33 s each locally: runs on main after merge, not in the merge gate
 @pytest.mark.parametrize("seed,duration,times,classes", [
     (0, 120.0, (30.0, 90.0), None),
     (1, 60.0, (15.0, 45.0), None),

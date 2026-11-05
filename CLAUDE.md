@@ -91,7 +91,7 @@ config.yaml           # search region, time prior, grid spacing, tolerances, ban
 ```
 
 ## Conventions
-- Python 3.11+: numpy, scipy, pandas, matplotlib, soundfile, pymap3d, pyproj, rasterio, geopandas, pyyaml, fastparquet (+cramjam). Tests with pytest. If a later dependency (e.g. pyopensky) pulls in pyarrow, switch Parquet to pyarrow and drop fastparquet rather than keeping both. Use a venv and pin requirements.txt.
+- Python 3.11+: numpy, scipy, pandas, matplotlib, soundfile, pymap3d, pyproj, rasterio, geopandas, pyyaml, fastparquet (+cramjam). Tests with pytest (+pytest-xdist for parallel runs: `-n 4`). If a later dependency (e.g. pyopensky) pulls in pyarrow, switch Parquet to pyarrow and drop fastparquet rather than keeping both. Use a venv and pin requirements.txt.
 - Internal time is float seconds since Unix epoch (UTC). Convert only at I/O boundaries.
 - Do distance and Doppler geometry in ECEF (EPSG:4978, metres): exact 3D slant ranges anywhere, no tile seams. The candidate grid is indexed in a projected CRS (UTM for regional, EPSG:5070 for US-wide); local ENU is only for plotting and synthetic scenario construction. Store and export vectors in EPSG:4326. Exception: score.tif is written in the grid's own projected CRS (UTM / EPSG:5070) so raster cells align exactly with grid cells; reprojecting it would resample cells.
 - Heights: ADS-B geometric altitude is height above the WGS84 ellipsoid; DEMs are usually orthometric, so add the geoid undulation from the geoid grid (data/proj/, see Known pitfalls) before comparing them.
