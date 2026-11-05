@@ -187,7 +187,7 @@ score:
   allow_shared_tracks: false
   max_hypotheses_per_cell: 64
 outputs:
-  root: /private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system/runs
+  root: <scratch>/skeptic_system/runs
   keep_runs: 5
   write_grid: auto
   max_raster_cells: 50000000

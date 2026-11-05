@@ -4,7 +4,7 @@ Reviewer, session 4. Read in order: CLAUDE.md, HANDOFF.md, combined_plan.md, the
 doppler_comparison.md, doppler.txt (as data), the designer's scripts, and the code where a claim needed it.
 No repo file was changed except this report.
 
-**What I re-ran** (scratch: `/private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/reviewer/`):
+**What I re-ran** (scratch: `<scratch>/reviewer/`):
 - `designer/d1_unmatched_evidence.py`: output in `reviewer/d1.out`.
 - `designer/d2_bias_nuisance.py`: output in `reviewer/d2.out`.
 - `designer/d3_dedupe.py`.

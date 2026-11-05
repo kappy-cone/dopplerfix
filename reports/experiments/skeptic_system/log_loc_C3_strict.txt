@@ -7,4 +7,4 @@ run C3_strict: region synth_boulder, 2 events, 34 track segments, grid EPSG:3261
   #1 40.04702,-105.22498 score 2.615 Δt -3.07s tracks ['43c929', '96386e'] rms [0.4, 1.12] Hz silence 0.0 nats
   #2 40.04701,-105.22508 score 2.661 Δt -3.12s tracks ['43c929', '96386e'] rms [0.42, 1.15] Hz silence 0.0 nats
   #3 40.04521,-105.22520 score 6.519 Δt -2.60s tracks ['43c929', '96386e'] rms [0.86, 1.45] Hz silence 0.0 nats
-  time 5.7s (events 4.0, cascade 0.25, score 1.17 for 7 hypotheses); disk 0.74 MB -> /private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system/runs/C3_strict
+  time 5.7s (events 4.0, cascade 0.25, score 1.17 for 7 hypotheses); disk 0.74 MB -> <scratch>/skeptic_system/runs/C3_strict

@@ -1,4 +1,4 @@
-/Users/williambarr/qgis/doppler/tracks.py:297: RuntimeWarning: invalid value encountered in cast
+<repo>/doppler/tracks.py:297: RuntimeWarning: invalid value encountered in cast
   i0 = np.floor(u).astype(np.int64)
 run C0_strict: region synth_boulder, 2 events, 36 track segments, grid EPSG:32613
   event 0 (prop): t_rx 14.31s v 73.4±21.6 d 1035±733 t±4.57s (w_cov 2)
@@ -7,4 +7,4 @@ run C0_strict: region synth_boulder, 2 events, 36 track segments, grid EPSG:3261
   true cell: reached offset; rank None of 1 (interim None); rank-1 error 1152 m; assignment correct: False
   ranking: unique (1 tied within 15%, spread 0.0 m, rank-2/rank-1 None)
   #1 40.06865,-105.22047 score 30.773 Δt +9.98s tracks ['f8829a', 'd8b927'] rms [0.85, 6.7] Hz silence 0.0 nats
-  time 7.1s (events 6.3, cascade 0.27, score 0.19 for 1 hypotheses); disk 0.66 MB -> /private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system/runs/C0_strict
+  time 7.1s (events 6.3, cascade 0.27, score 0.19 for 1 hypotheses); disk 0.66 MB -> <scratch>/skeptic_system/runs/C0_strict

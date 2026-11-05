@@ -1,7 +1,7 @@
 #!/bin/bash
 # scenario sweep: realistic synth (all realism on), both design variants
-S=/private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system
-cd /Users/williambarr/qgis
+S=<scratch>/skeptic_system
+cd <repo>
 PY=.venv/bin/python
 run() { # name seed dur times
   name=$1; seed=$2; dur=$3; times=$4

@@ -1,6 +1,6 @@
 """Reviewer check of D-2C: does the drift prior width matter at all, and what beta is fitted?"""
 import sys, importlib.util
-R="/private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad"
+R="<scratch>"
 sys.path.insert(0, R+"/skeptic_physics")
 import numpy as np, io, contextlib
 spec = importlib.util.spec_from_file_location("d2", R+"/designer/d2_bias_nuisance.py")

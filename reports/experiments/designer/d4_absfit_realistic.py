@@ -3,7 +3,7 @@ residual (Hz) of the rank-1 candidate with that of the true cell. Can an absolut
 wrong rank 1s under realism, or does it also flag true answers?"""
 import json, glob, os
 import numpy as np, geopandas as gpd
-R = "/private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system/runs"
+R = "<scratch>/skeptic_system/runs"
 for d in sorted(glob.glob(R + "/*_*")):
     j = json.load(open(d + "/run.json")); te = j.get("truth_eval") or {}
     try:

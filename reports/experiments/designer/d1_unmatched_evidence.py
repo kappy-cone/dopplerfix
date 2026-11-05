@@ -2,7 +2,7 @@
 and test whether (a) an absolute per-event goodness-of-fit check on rank 1 and (b) evidence ranking with an
 unmatched-event price would have caught it. Reuses the skeptic's E1 scenario generator (read-only import)."""
 import sys, time
-sys.path.insert(0, "/private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system")
+sys.path.insert(0, "<scratch>/skeptic_system")
 import numpy as np
 from common import *
 import e1_density as E

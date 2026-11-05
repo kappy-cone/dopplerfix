@@ -16,8 +16,8 @@ accepted; §6 (Revision log) records how each was resolved.
 - `Lnnn`: doppler.txt line.
 - `file:function`: our code.
 - `[D-n]`: my re-checks, in
-  `/private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/designer/`.
-  Run them with `cd /Users/williambarr/qgis && PYTHONPATH=. .venv/bin/python <script>`.
+  `<scratch>/designer/`.
+  Run them with `cd <repo> && PYTHONPATH=. .venv/bin/python <script>`.
 
 **Variant names**
 - **V0-asdesigned / V1-asdesigned.** Strict (`max_unmatched_events: 0`, `silence_audibility: hard`) and

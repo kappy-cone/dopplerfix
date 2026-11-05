@@ -12,7 +12,7 @@ Evidence labels: **VERIFIED** (I ran an experiment), **CODE-READ** (follows from
 **SUSPECTED** (domain knowledge or inference that I have not tested here).
 
 Scratch experiments are in
-`/private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system/`:
+`<scratch>/skeptic_system/`:
 - `e1_density.py` (+ `e1_out.txt`, `e1b.py`): how many wrong cells survive as traffic density rises. Truth-derived
   events with exact ridges from `physics.predicted_ratio_at`, straight tracks, flat ground, 10 km grid radius,
   K background props within 15 km. Both variants, with and without event 2's aircraft in ADS-B.

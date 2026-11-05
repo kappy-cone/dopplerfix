@@ -5,8 +5,8 @@ free parameters, and the realism gap (all realism on → true cell rank 5–39).
 cascade/system/validation/scale. Independence: I did not open doppler.txt or anything else under reports/.
 
 All scripts are in
-`/private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_physics/`
-(run as `cd /Users/williambarr/qgis && PYTHONPATH=.:<that dir> .venv/bin/python <script>`). No repo file was
+`<scratch>/skeptic_physics/`
+(run as `cd <repo> && PYTHONPATH=.:<that dir> .venv/bin/python <script>`). No repo file was
 edited; pipeline runs wrote only to that scratch directory (scratch config with `outputs.root` redirected).
 
 Evidence labels: **VERIFIED** = computed or tested here; **CODE-READ** = from reading code; **SUSPECTED** =

@@ -197,7 +197,7 @@ score:                       # locked N-event scoring: one shared Δt, one f0 pe
   max_hypotheses_per_cell: 64
 
 outputs:
-  root: /private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_physics/runs
+  root: <scratch>/skeptic_physics/runs
   keep_runs: 5               # cli.py clean keeps the newest N runs
   write_grid: auto           # auto: regional runs only | true | false
   max_raster_cells: 50000000 # score.tif built in memory below this; above, a sparse tiled GeoTIFF

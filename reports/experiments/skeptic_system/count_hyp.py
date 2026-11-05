@@ -1,13 +1,13 @@
 """Cascade-only replay of a scenario (no scoring): survivors and hypothesis counts per variant."""
 import sys, json, time
 from pathlib import Path
-sys.path.insert(0, "/Users/williambarr/qgis")
+sys.path.insert(0, ".")
 import numpy as np, soundfile as sf
 import cli
 from doppler import audio, cascade, geo
 sc = Path(sys.argv[1])
 for v in sys.argv[2:]:
-    cfg = cli.load_config(f"/private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system/cfg_{v}.yaml")
+    cfg = cli.load_config(f"<scratch>/skeptic_system/cfg_{v}.yaml")
     c = cli.speed_of_sound_from(cfg)
     x, fs = sf.read(sc / "audio.flac"); x = audio.mix_to_mono(x)
     tp = audio.parse_time_prior(json.loads((sc / "audio.json").read_text()))

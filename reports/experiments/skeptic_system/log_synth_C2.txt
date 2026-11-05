@@ -12,10 +12,10 @@ fitted events:
  3     32.95   105.5   64.0±19.4    3026±1741     24.14±9.10   0.14 prop    0.2/0.6
  4     40.30   168.3   55.5±62.5     713±879      38.23±9.23   0.53 unknown 3.1/-0.5
  5     45.04   149.2   89.0±1.6     1165±51       41.65±0.11   0.52 prop    1.6/1.1
-  wrote audio    /private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system/scn/C2/audio.flac
-  wrote sidecar  /private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system/scn/C2/audio.json
-  wrote tracks   /private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system/scn/C2/tracks.parquet
-  wrote truth    /private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system/scn/C2/truth.json
-  wrote gpkg     /private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system/scn/C2/truth.gpkg
-  wrote registry /private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system/scn/C2/aircraft_db.csv
-  wrote plot     /private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system/scn/C2/diagnostic.png
+  wrote audio    <scratch>/skeptic_system/scn/C2/audio.flac
+  wrote sidecar  <scratch>/skeptic_system/scn/C2/audio.json
+  wrote tracks   <scratch>/skeptic_system/scn/C2/tracks.parquet
+  wrote truth    <scratch>/skeptic_system/scn/C2/truth.json
+  wrote gpkg     <scratch>/skeptic_system/scn/C2/truth.gpkg
+  wrote registry <scratch>/skeptic_system/scn/C2/aircraft_db.csv
+  wrote plot     <scratch>/skeptic_system/scn/C2/diagnostic.png

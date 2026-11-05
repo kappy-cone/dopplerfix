@@ -1,7 +1,7 @@
 # Skeptical review: the methodology described in `doppler.txt`
 
-Scope: this reviews only the narration in `/Users/williambarr/qgis/doppler.txt`, an 839-line auto-caption transcript of a video. Anything that appeared only on screen (thresholds, equations, code, axis labels, tolerance values) is missing. Below, **"not described"** means the narration doesn't mention something. It does not mean they didn't do it. No other repo file was consulted.
-Numbers marked *(calc)* come from `/private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_theirs/calc.py`.
+Scope: this reviews only the narration in `<repo>/doppler.txt`, an 839-line auto-caption transcript of a video. Anything that appeared only on screen (thresholds, equations, code, axis labels, tolerance values) is missing. Below, **"not described"** means the narration doesn't mention something. It does not mean they didn't do it. No other repo file was consulted.
+Numbers marked *(calc)* come from `<scratch>/skeptic_theirs/calc.py`.
 
 Their headline claim: from audio alone (date known, Sept 8; region = CONUS), they located a security camera "within a couple hundred feet" (L719–722), at about 40.87, −73.5 (L688–690). That is Long Island's North Shore.
 

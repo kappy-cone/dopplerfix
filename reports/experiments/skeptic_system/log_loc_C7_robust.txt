@@ -1,4 +1,4 @@
-/Users/williambarr/qgis/doppler/tracks.py:297: RuntimeWarning: invalid value encountered in cast
+<repo>/doppler/tracks.py:297: RuntimeWarning: invalid value encountered in cast
   i0 = np.floor(u).astype(np.int64)
 run C7_robust: region synth_boulder, 2 events, 35 track segments, grid EPSG:32613
   event 0 (prop): t_rx 14.83s v 77.6±16.1 d 1360±472 t±3.31s (w_cov 2)
@@ -9,4 +9,4 @@ run C7_robust: region synth_boulder, 2 events, 35 track segments, grid EPSG:3261
   #1 40.02654,-105.20360 score 3.631 Δt +0.67s tracks ['7ff206', '71f085'] rms [0.3, 0.68] Hz silence 1.3 nats
   #2 40.02643,-105.20392 score 4.876 Δt +0.86s tracks ['7ff206', '71f085'] rms [0.3, 0.97] Hz silence 1.5 nats
   #3 40.02724,-105.20355 score 6.263 Δt +0.73s tracks ['7ff206', '71f085'] rms [0.57, 0.29] Hz silence 3.1 nats
-  time 57.9s (events 5.6, cascade 0.50, score 51.38 for 878 hypotheses); disk 1.24 MB -> /private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system/runs/C7_robust
+  time 57.9s (events 5.6, cascade 0.50, score 51.38 for 878 hypotheses); disk 1.24 MB -> <scratch>/skeptic_system/runs/C7_robust

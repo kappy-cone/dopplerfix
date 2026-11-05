@@ -2,7 +2,7 @@
 import json, glob, os
 import numpy as np
 
-S = "/private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system"
+S = "<scratch>/skeptic_system"
 rows = []
 for f in sorted(glob.glob(S + "/runs/*/run.json")):
     d = json.load(open(f))

@@ -1,6 +1,6 @@
 """Shared helpers for the skeptic experiments: straight-line traffic, truth events, cascade runs."""
 import sys
-sys.path.insert(0, "/Users/williambarr/qgis")
+sys.path.insert(0, ".")
 import numpy as np
 import cli
 from doppler import aircraft_types as at
@@ -10,7 +10,7 @@ from doppler import geo, synth, tracks, physics as ph, score
 FRAME = geo.LocalFrame(40.0394, -105.2258, 1600.0)
 START = 1781532000.0
 C = 343.4
-CFG = cli.load_config("/Users/williambarr/qgis/config.yaml")
+CFG = cli.load_config("./config.yaml")
 STRICT = dict(max_unmatched_events=0, silence_audibility="hard")
 
 

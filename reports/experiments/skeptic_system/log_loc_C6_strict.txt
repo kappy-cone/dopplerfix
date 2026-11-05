@@ -6,4 +6,4 @@ run C6_strict: region synth_boulder, 4 events, 37 track segments, grid EPSG:3261
   survivors: grid 2,821 -> cpa 173 -> offset 52 -> silence 0  (silence removed 52)
   true cell: reached grid; rank None of 0 (interim None); rank-1 error None m; assignment correct: False
   ranking: none (0 tied within 15%, spread None m, rank-2/rank-1 None)
-  time 25.3s (events 4.2, cascade 20.80, score 0.00 for 0 hypotheses); disk 0.65 MB -> /private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_system/runs/C6_strict
+  time 25.3s (events 4.2, cascade 20.80, score 0.00 for 0 hypotheses); disk 0.65 MB -> <scratch>/skeptic_system/runs/C6_strict

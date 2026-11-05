@@ -7,7 +7,7 @@
     through the estimator; does the predicted error ellipse cover the measured biases?
 L2 loss, sigma 0.15 Hz per 0.5 s point, +-60 s ridges, true c, still air (uses skeptic bias_budget helpers)."""
 import sys
-sys.path.insert(0, "/private/tmp/claude-501/-Users-williambarr-qgis/c334e685-7499-4d45-9232-dd5dbcafcf8c/scratchpad/skeptic_physics")
+sys.path.insert(0, "<scratch>/skeptic_physics")
 import numpy as np
 from scipy.optimize import least_squares
 import bias_budget as bb

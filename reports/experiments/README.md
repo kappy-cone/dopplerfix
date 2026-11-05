@@ -16,7 +16,9 @@ scenarios and runs they generated (about 30 MB) were not kept; they can be regen
   (`2b83ad2`) changed the realistic-scenario random streams (P0.2) and the cascade enumeration (P0.1-i).
   Realistic numbers will not reproduce exactly on later code. To reproduce, check out `388832d` or tag
   `variants-asdesigned` (same code as `388832d`), e.g. in a worktree.
-- **Paths.** Some scripts and configs hard-code the session's temporary scratch directory
-  (`/private/tmp/.../scratchpad/...`). Edit them to a local folder first.
+- **Paths.** Machine-specific paths are replaced by placeholders: `<scratch>` is the reviewing session's
+  temporary scratch folder, which held the folders copied here (`<scratch>/skeptic_system` corresponds to
+  `reports/experiments/skeptic_system`). `<repo>` is the repo root, and `.` is used where a script needs a
+  working path. Point `<scratch>` at a local folder before running a script.
 - **How to run.** From the repo root: `.venv/bin/python reports/experiments/<folder>/<script>.py`. They import
   `doppler.*`. `skeptic_theirs/calc.py` is standalone.
