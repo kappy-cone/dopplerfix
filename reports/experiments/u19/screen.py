@@ -48,10 +48,8 @@ def arm_cfg(cfg: dict, arm: str) -> dict:
     return deep_merge(cfg, over)
 
 
-def scenario_audio(conf: str, seed: int, scenario: str):
-    """(cfg, scenario, truth dict, mono audio, fs): the scenario exactly as `cli.py ablate` builds and writes it."""
-    from doppler import export
-
+def build_scenario(conf: str, seed: int, scenario: str):
+    """(cfg, scenario object) exactly as `cli.py ablate` builds it (no audio written)."""
     cfg = load_config(CONFIG)
     _, region = load_region(cfg, None)
     _, radius = region_frame(region)
@@ -62,6 +60,14 @@ def scenario_audio(conf: str, seed: int, scenario: str):
     sp.setdefault("mic_height_m", section(cfg, "mic").get("height_agl_m", 1.5))
     params = synth.SynthParams.from_dict(sp)
     sc, _, _ = build_synth_scenario(cfg, region, params, realism_for(cfg, conf), params.n_cascade_decoys)
+    return cfg, sc
+
+
+def scenario_audio(conf: str, seed: int, scenario: str):
+    """(cfg, scenario, truth dict, mono audio, fs): the scenario exactly as `cli.py ablate` builds and writes it."""
+    from doppler import export
+
+    cfg, sc = build_scenario(conf, seed, scenario)
     tmp = Path(tempfile.mkdtemp(prefix="u19_"))
     try:
         export.write_scenario(sc, tmp)
