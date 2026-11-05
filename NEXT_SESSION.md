@@ -19,6 +19,13 @@ Add to doppler/evaluate.py and the ablate summary, with tests:
 Hand-check at least 5 Stage A rows against their kept truth and events before trusting the new metrics.
 Write the results into reports/stageA.md as an addendum.
 
+Step 1b (before Phase 1): profile score.rank_cells. Read-only first: cProfile the slowest Stage A V1
+units, the 900 s timeouts (all-on seeds 11 and 23) and the 69,348-hypothesis clip, rebuilt from their
+seeds. Report where the time goes. Then:
+- an identical-result speed-up may go in only if it reproduces the Stage A rows exactly on at least 5 seeds,
+  for both V0 and V1, and lands as its own commit before any P1.1 change;
+- anything that changes results (top-K hypotheses per cell, a lower cap) stays a measured arm for me to decide.
+
 Step 2, Phase 1 starting with P1.1, as a comparison arm, never a new default. Its acceptance test is U18:
 on all-on C, n = 100 paired seeds (0-99; add an ablation plan for seeds 50-99 so Stage A's 0-49 are reused),
 precision of unique must beat the 44 % status-ignored baseline without lowering rank-1 accuracy, and the
