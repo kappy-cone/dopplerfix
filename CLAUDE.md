@@ -102,6 +102,7 @@ config.yaml           # search region, time prior, grid spacing, tolerances, ban
 - Vectorize the cascade and scoring with numpy. Flag hot spots before reaching for numba or multiprocessing.
 - All tolerances and thresholds live in config.yaml, not in code.
 - Explain any new dependency before adding it.
+- The repo is public: no personal or machine details in any committed file or commit message. That means no hardware specs, hostnames, OS usernames, home or temp paths, email addresses or names. Write neutral terms ("the compute machine") and placeholders (`<repo>`, relative paths) from the start; this applies to text from subagents and other sessions too. It is a standing rule for writing, not a separate review step before each push.
 
 ### Storage (disk is limited)
 Optimize for storage wherever it costs no functionality or accuracy; when there is a real trade-off, ask.
