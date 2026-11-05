@@ -6,6 +6,13 @@ Canonical tabular schema (CSV/Parquet), one row per fix:
 OpenSky-style names (time, geoaltitude, baroaltitude, velocity, heading,
 vertrate) are mapped automatically; other names can be mapped via config.
 
+OpenSky state vectors (the scientific datasets' hourly CSV, and the Trino table
+``state_vectors_data4``, which share one schema; docs/opensky_ingest.md) are
+recognised by their time/lastposupdate/lastcontact columns and typed by
+``parse_opensky_states`` (SI units already: m, m/s, deg). Frames renamed by
+traffic/pyopensky (``altitude``, ``groundspeed``, ``vertical_rate``) are refused
+unless mapped explicitly, because their units depend on the library.
+
 Heights are ellipsoidal (ADS-B geometric altitude). Barometric altitude is a
 fallback, flagged per track so later stages can widen tolerances.
 """
@@ -31,6 +38,17 @@ DEFAULT_ALIASES = {
     "geoaltitude": "geometric_alt_m", "baroaltitude": "baro_alt_m", "velocity": "ground_speed_mps",
     "heading": "track_deg", "vertrate": "vertical_rate_mps",
 }
+# OpenSky state-vector columns as documented (README of the state-vector samples; Trino state_vectors_data4).
+OPENSKY_STATE_COLUMNS = (
+    "time", "icao24", "lat", "lon", "velocity", "heading", "vertrate", "callsign", "onground", "alert",
+    "spi", "squawk", "baroaltitude", "geoaltitude", "lastposupdate", "lastcontact",
+)
+_OPENSKY_NUMERIC = ("lat", "lon", "velocity", "heading", "vertrate", "baroaltitude", "geoaltitude",
+                    "lastposupdate", "lastcontact")
+_OPENSKY_FLAGS = ("onground", "alert", "spi")
+# Names used by traffic / pyopensky's history(): their units are not stated by the name (traffic converts
+# to ft, kt and ft/min). Refused unless the caller maps them explicitly.
+UNIT_AMBIGUOUS_COLUMNS = ("altitude", "groundspeed", "vertical_rate")
 
 
 @dataclass(frozen=True)
@@ -112,8 +130,73 @@ def tracks_to_frame(tracks: list[Track], frame: LocalFrame) -> pd.DataFrame:
     return pd.concat(rows, ignore_index=True)[TRACK_COLUMNS]
 
 
+def is_opensky_states(df: pd.DataFrame) -> bool:
+    """True for a raw OpenSky state-vector table (before renaming): has time, lastposupdate, lastcontact."""
+    return {"time", "lastposupdate", "lastcontact"} <= {str(c).lower() for c in df.columns}
+
+
+def _flag(s: pd.Series) -> pd.Series:
+    """OpenSky boolean flags as read from CSV ('true'/'false', 1/0, blank) -> bool (blank = False)."""
+    if pd.api.types.is_bool_dtype(s):
+        return s.astype(bool)
+    return s.astype(str).str.strip().str.lower().isin(["true", "t", "1", "1.0"])
+
+
+def _squawk(s: pd.Series) -> pd.Series:
+    """Squawk as a 4-digit string. CSV readers turn '0123' into 123 (or 123.0 next to blanks)."""
+    def one(x) -> str:
+        if pd.isna(x):
+            return ""
+        if isinstance(x, (int, float, np.integer, np.floating)):
+            return f"{int(x):04d}"
+        x = str(x).strip()
+        return x.zfill(4) if x.isdigit() else x
+    return s.map(one).astype(object)
+
+
+def parse_opensky_states(df: pd.DataFrame) -> pd.DataFrame:
+    """Type a raw OpenSky state-vector table (CSV, Avro or Trino ``state_vectors_data4``).
+
+    Units are already SI (m, m/s, deg from north; times epoch seconds), so values are not converted:
+    blanks become NaN, flags become bool, squawk stays a 4-digit string. Columns keep their OpenSky
+    names; ``normalize_frame`` maps them. Raises ValueError if the position columns are missing.
+    """
+    out = df.rename(columns=lambda c: str(c).lower()).copy()
+    missing = [c for c in ("time", "icao24", "lat", "lon") if c not in out.columns]
+    if missing or not ({"geoaltitude", "baroaltitude"} & set(out.columns)):
+        raise ValueError(f"not an OpenSky state-vector table: missing {missing or ['geoaltitude/baroaltitude']}")
+    if not pd.api.types.is_datetime64_any_dtype(out["time"]):
+        out["time"] = pd.to_numeric(out["time"], errors="coerce")
+    for c in _OPENSKY_NUMERIC:
+        if c in out.columns:
+            out[c] = pd.to_numeric(out[c], errors="coerce").astype(float)
+    for c in _OPENSKY_FLAGS:
+        if c in out.columns:
+            out[c] = _flag(out[c])
+    if "squawk" in out.columns:
+        out["squawk"] = _squawk(out["squawk"])
+    return out
+
+
+def _check_units(df: pd.DataFrame, aliases: dict | None) -> None:
+    """Refuse traffic/pyopensky-renamed frames whose altitude/speed units are not known."""
+    explicit = {str(k).lower() for k in (aliases or {})}
+    bad = [c for c in df.columns if str(c).lower() in UNIT_AMBIGUOUS_COLUMNS and str(c).lower() not in explicit]
+    if bad:
+        raise ValueError(
+            f"columns {bad} have no stated units (traffic/pyopensky rename OpenSky columns and may convert "
+            "to ft, kt, ft/min). Use the raw OpenSky names (geoaltitude, velocity, vertrate; m, m/s), or "
+            "convert to the canonical SI columns and map them via tracks.columns.")
+
+
 def normalize_frame(df: pd.DataFrame, aliases: dict | None = None) -> pd.DataFrame:
-    """Rename columns to the canonical schema and convert time to epoch seconds (``t_s``)."""
+    """Rename columns to the canonical schema and convert time to epoch seconds (``t_s``).
+
+    Idempotent. Adds a bool ``onground`` column (False where the source has none).
+    """
+    if is_opensky_states(df):
+        df = parse_opensky_states(df)
+    _check_units(df, aliases)
     amap = {**DEFAULT_ALIASES, **(aliases or {})}
     df = df.rename(columns={c: amap.get(c, amap.get(c.lower(), c)) for c in df.columns}).copy()
     for col in TRACK_COLUMNS:
@@ -133,6 +216,7 @@ def normalize_frame(df: pd.DataFrame, aliases: dict | None = None) -> pd.DataFra
         df = df.drop_duplicates(subset=["icao24", "t_s"], keep="first") if "icao24" in df.columns else df
     df["icao24"] = df["icao24"].astype(str).str.strip().str.lower()
     df["callsign"] = df["callsign"].fillna("").astype(str).str.strip()
+    df["onground"] = _flag(df["onground"]) if "onground" in df.columns else False
     return df
 
 
