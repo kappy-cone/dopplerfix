@@ -34,6 +34,11 @@ answer rate is reported. Add any new knob to reports/apriori_registry.md before 
 Step 3, §8.2 detection item (U19), alongside Phase 1, measured on recall and false events. Don't touch
 detect.trigger_db or any other provisional threshold.
 
+Guards: a speed-up counts as identical only if V0/V1 rows match Stage A bit-for-bit; otherwise it is
+a result-changing arm for me to decide. Detection changes go behind a config flag, off by default in
+V0 and V1; the U18 P1.1 run uses detection off, and detection is measured in its own comparison. Commit
+after each step, and stop for my go-ahead after Step 2 before starting Step 3.
+
 Rules: keep V0 and V1 runnable and compared; never tune provisional values on synthetic data; don't edit
 code in a checkout while an ablation is running from it (use a separate worktree); run decision ablations
 on a clean, committed tree; commit or push only when I ask. Stop and ask before any change to a CLAUDE.md
