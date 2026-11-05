@@ -1,7 +1,6 @@
 # Stage A baseline (P0.6), session 5
 
-**Run.** `cli.py ablate --plan stageA` on scenario C (60 s, events at 15/45 s), on the user's PC (Ryzen 7
-9800X3D, 8 cores, 59 GB), `--jobs 8`, 900 s cap per run. Raw rows are in `outputs/ablation/stageA/rows.jsonl`
+**Run.** `cli.py ablate --plan stageA` on scenario C (60 s, events at 15/45 s), on the user's compute machine, `--jobs 8`, 900 s cap per run. Raw rows are in `outputs/ablation/stageA/rows.jsonl`
 (gitignored, 650 rows; per-config table in `summary.md`, the run log in `run.log`).
 - V0 and V1: commit 7ea5883, clean tree, all 275 units (all-on × 50, 9 LOO configs × 20, clean × 5, the
   skeptics' 4 experiments × 10).

@@ -4,7 +4,7 @@ Read CLAUDE.md first; it is authoritative for methodology and conventions. This 
 records session state, decisions, and what is fragile.
 
 ## START HERE (session 5: on the user's PC; Stage A done, Phase 0 complete; next is Phase 1)
-**Session 5.** New machine set up (Ryzen 7 9800X3D, 8 cores / 16 threads, 59 GB): 157 tests passed (133
+**Session 5.** New machine set up: 157 tests passed (133
 fast, 24 slow), then Stage A ran at `--jobs 8` in about 1 h 40 min. Read **`reports/stageA.md`** first.
 - **Re-ordering rule: written order** (no failure class reaches 40 %; V1 is 37 % survival at CPA and 37 %
   discrimination). So Phase 1 goes next, starting with P1.1. The pilot's "P3.5 first" did not hold at n = 50.
