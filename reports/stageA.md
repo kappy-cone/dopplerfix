@@ -263,7 +263,49 @@ marked xfail with that value; nothing was tuned.
   the robust (MAD) scale instead, so the mixture bound holds.
 - V1c costs about 1.15–1.3× V1 per run (all-on 18: 802 vs 615 s), so it may time out slightly more often.
 
-**U18 run: a screen, not the decision run.** CONTRIBUTING §4 (added by another session while this ran) says
-decision runs come only from a clean, committed `main` or a tag. The U18 run here uses commit 7057c08 (local tag
-`s5-u18-screen`), which is this session's branch before review, so its rows are a screen. After review and
-merge, the decision run is the same two commands from `main`. Its results will be added here when it finishes.
+## Session 5, step 2 result: U18 acceptance — **V1c fails** (rank-1 accuracy drops)
+
+**Run.** All-on C, seeds 0–99. V0c/V1c on seeds 0–49, and V0/V1/V0c/V1c on seeds 50–99 (`--plan stageA_ext`),
+paired with Stage A's V0/V1 rows for seeds 0–49. `--jobs 8`, 900 s cap, 0 errors. The rows record commit
+7057c08 (local tag `s5-u18-screen`). Its code (`doppler/`, `cli.py`, `config.yaml`, `tests/`) is identical to
+`main` at 17da806, and the user accepted pushing it directly, so this counts as the decision run. V0/V1 on seeds
+50–99 ran with the speed-up, whose results are bit-identical to the Stage A code. The new rows are committed as
+`reports/data/u18_rows.jsonl.gz`, with `u18_detection.json` (all-on recall on seeds 50–99: 81 / 100).
+
+| arm | n | correct | rank-1 acc (status ignored) | answer rate (unique) | precision of unique [95 % CI] | confident-wrong | timeout | cond. n | cond. rank-1 acc | cond. precision |
+|---|---|---|---|---|---|---|---|---|---|---|
+| V0 | 100 | 6 | 8 | 26 | 6 / 26 = 23 % [9, 44] | 18 | 0 | 65 | 8 | 6 / 18 |
+| **V1** | 100 | 21 | **34** | 38 | 21 / 38 = 55 % [38, 71] | 11 | 3 | 65 | 31 | 20 / 32 |
+| V0c | 100 | 4 | 7 | 10 | 4 / 10 = 40 % [12, 74] | 6 | 0 | 65 | 7 | 4 / 9 |
+| **V1c** | 100 | 11 | **25** | 18 | **11 / 18 = 61 %** [36, 83] | 4 | 3 | 65 | 23 | 10 / 15 |
+| V0-asdesigned | 50 | 2 | 3 | 23 | 2 / 23 = 9 % [1, 28] | 16 | 0 | 30 | 3 | 2 / 15 |
+| V1-asdesigned | 50 | 12 | 15 | 27 | 12 / 27 = 44 % [25, 65] | 12 | 5 | 30 | 13 | 11 / 21 |
+
+**U18 verdict.**
+- Precision of unique: V1c 61 % > 44 %, so this criterion is met. Its interval is wide (18 answers), and
+  V1's own precision at n = 100 is 55 %: seeds 50–99 are kinder to V1 than 0–49 were.
+- **Rank-1 accuracy must not drop: it drops**, from 34 (V1) to 25 (V1c). Paired on the same seeds, V1c is right
+  where V1 is not on 1 seed, and the reverse on 10 (exact sign test, p = 0.012). **U18 fails.** V1c is not
+  adopted as a default; it stays a comparison arm.
+- Answer rate: V1c 18 / 100, against V1's 38.
+- Paired, V1c vs V1:
+  - correct: 3 seeds V1c only, 13 V1 only (p = 0.021);
+  - confident-wrong: 1 vs 8 (p = 0.039), so V1c is safer;
+  - rank-1 error: median +10 m (n = 90, p = 0.057).
+
+**What V1c does** (nothing tuned; all a-priori values):
+- **The calibrated likelihood changes the ranking, not just the labels.** It loses 9 right rank-1 answers net.
+  Discrimination failures rise from 25 to 30 and bias from 14 to 18.
+- **The new statuses abstain heavily.** On V1c's 25 right answers: 11 unique, 10 inconsistent, 4 ambiguous.
+  The χ² absolute fit flags 44 / 100 runs, 10 of them right. Every one of the 17 `locus` runs was wrong.
+- V0c gives V0 a much lower confident-wrong count (18 → 6; 14 vs 2 discordant, p = 0.004), at no cost in rank-1
+  accuracy (8 → 7), but it answers on only 10 runs.
+
+**Likely causes (for the user; untested here):**
+- The per-point ADS-B budget. Its latency term down-weights the CPA region, where the curve discriminates
+  between cells and aircraft (step 2 findings above).
+- The effective-N factor under-corrects for correlated ridge noise (the missed AR(1) test). Either would weaken
+  discrimination.
+
+Both are a-priori values or plan-specified forms, so changing them needs a new source (P3.1's covariance,
+4.5 data), not a re-tune against this result.
