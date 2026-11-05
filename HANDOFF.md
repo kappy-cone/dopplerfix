@@ -3,7 +3,28 @@
 Read CLAUDE.md first; it is authoritative for methodology and conventions. This file
 records session state, decisions, and what is fragile.
 
-## START HERE (session 5: on the user's PC; Stage A done, Phase 0 complete; next is Phase 1)
+## START HERE (session 6: U19 detection, plan §8.2; branch `s6-u19-detection`)
+Read `NEXT_SESSION.md` (the session 6 prompt), CONTRIBUTING.md (branches, PRs, §7 CI), plan §8.2–8.4, and the
+U18 section at the end of `reports/stageA.md`.
+- **Where things stand.** Phase 1's P1.1 + P1.4 arms (V1c, V0c) failed U18: V1c's precision of unique is 61 %, but
+  its rank-1 accuracy (status ignored) drops from V1's 34 to 25 on all-on C n = 100. They stay comparison arms.
+  The U18 reference rows are in `reports/data/` (`stageA_rows.jsonl.gz`, `u18_rows.jsonl.gz`, plus per-unit
+  detection counts).
+- **U19.** Detection arms (a) harmonic-summed row, (b) 3 s long-window rows, (c) 20–100 Hz low-band row. All are
+  in `doppler/detect.py`, off by default (V0/V1 rows unchanged), registered in `reports/apriori_registry.md`. The
+  detection-only screen is `reports/experiments/u19/screen.py`. Stop points: after the screen, and after the
+  pre-registered acceptance rule.
+- **Where Stage A's missed events are lost** (baseline screen, all-on seeds 0–49): of 25 missed truth events,
+  14 have a detection window but no fitted event (lost in ridge / fit), 6 never trigger, and 5 trigger nearby
+  without a window. The §8.2 arms act only on the statistic. In `loo:path` and `sub:reflection` most misses never
+  trigger.
+- **Tests:** the fast suite takes about 2–4.5 min locally (CI shards it, CONTRIBUTING §7); the slow suite about
+  6 min.
+- **Waiting for the user, after U19's decision run** (`config.yaml` stays as it is until then, so the config
+  hash is stable): `aircraft_types.type_table_path: data/doc8643_types.csv` (real tracks only), and whether to
+  add `tracks.drop_onground` (a config key and a TrackParams field together).
+
+## Session 5 summary (Stage A, §8.1 measures, profile, P1.1/P1.4 and U18)
 **Session 5.** New machine set up: 157 tests passed (133
 fast, 24 slow), then Stage A ran at `--jobs 8` in about 1 h 40 min. Read **`reports/stageA.md`** first.
 - **Re-ordering rule: written order** (no failure class reaches 40 %; V1 is 37 % survival at CPA and 37 %
@@ -15,8 +36,8 @@ fast, 24 slow), then Stage A ran at `--jobs 8` in about 1 h 40 min. Read **`repo
   replace it; measure them against this baseline.
 - Fixed: the as-designed wrapper recorded "no events detected" as `error` (commit 385a725; the 5 affected
   units were rerun).
-- Setup notes for this machine: the system `python3` is not the project's; the venv uses
-  `~/.local/bin/python3.12`. `../qgis-asdesigned/data/proj` is a symlink to `dopplerfix/data/proj`, because the
+- Setup notes for the compute machine: the system `python3` is not the project's; the venv is built from a
+  separate Python 3.12. `../qgis-asdesigned/data/proj` is a symlink to `dopplerfix/data/proj`, because the
   as-designed arm runs `locate` from inside the worktree and would otherwise fall back to the constant geoid.
 
 ## Session 4 summary (Phase 0 code done, pilot run; moved to the user's PC via GitHub)
@@ -178,7 +199,7 @@ or duplicate events vetoed every cell) or a silence-rejected true cell.
 .venv/bin/python cli.py clean --keep 5
 .venv/bin/python cli.py regions list        # or: regions add --name X --lat .. --lon .. --radius-m ..
 QT_QPA_PLATFORM=offscreen /Applications/QGIS.app/Contents/MacOS/python -s qgis/build_project.py [--verify]
-.venv/bin/python -m pytest -m "not slow"    # ~45 s;  -m slow ~6.5 min
+.venv/bin/python -m pytest -m "not slow"    # ~2-4.5 min;  -m slow ~6 min
 ```
 QGIS's Python must run with `-s` (user site-packages in ~/.local break its shapely import).
 
