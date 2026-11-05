@@ -85,7 +85,9 @@ CI is built for fast merges: a session pushes, and its checks are back in about 
 - **The gate** (job `gate` in `.github/workflows/tests.yml`):
   - **When:** runs on every push to every branch. A PR therefore opens with its head commit already checked;
     opening it does not start another run.
-  - **What:** the fast suite without the `heavy` tests (`pytest -m "not slow and not heavy" -n 4`). It runs on
+  - **What:** the fast suite without the `heavy` tests (`pytest -m "not slow and not heavy"`). It is split into
+    4 parallel jobs `gate (0/4)` … `gate (3/4)` by a hash of each test id (`--shard I/N` in `tests/conftest.py`),
+    so every test runs in exactly one job and new tests need no bookkeeping. Each job runs 4 xdist workers, on
     a pinned runner image and Python 3.12, with the virtualenv cached on `requirements.txt`.
   - **Target:** about 30 s from push to result.
   - **Superseded runs:** a newer push to the same branch cancels the older run.
@@ -115,6 +117,6 @@ CI is built for fast merges: a session pushes, and its checks are back in about 
 - **Branch protection stays off** until CI has run on about 10 real PRs without a false alarm. Until then a
   red run is read by a person, and the user decides whether it blocks. Record false alarms in the PR they
   happened on. When protection is turned on:
-  - make `gate` the required check;
-  - docs-only commits skip the workflow, so either drop `paths-ignore` then, or add a no-op `gate` job for
-    docs-only changes.
+  - make the four `gate (i/4)` checks required;
+  - docs-only commits skip the workflow, so either drop `paths-ignore` then, or add no-op jobs with the same
+    names for docs-only changes.

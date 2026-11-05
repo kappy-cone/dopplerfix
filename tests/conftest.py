@@ -1,8 +1,35 @@
+import zlib
+
 import numpy as np
 import pytest
 
 from doppler import audio, synth
 from doppler.geo import LocalFrame
+
+
+# --- CI sharding (CONTRIBUTING §7): `--shard i/n` keeps only the tests whose id hashes to shard i. ---
+def shard_of(nodeid: str, n: int) -> int:
+    """Deterministic shard 0..n-1 of a test id (same on every machine and every xdist worker)."""
+    return zlib.crc32(nodeid.encode()) % n
+
+
+def pytest_addoption(parser):
+    parser.addoption("--shard", default=None, metavar="I/N",
+                     help="run only shard I (0-based) of N, split by a hash of the test id (CI gate)")
+
+
+def pytest_collection_modifyitems(config, items):
+    spec = config.getoption("--shard")
+    if not spec:
+        return
+    i, n = (int(x) for x in spec.split("/"))
+    if not 0 <= i < n:
+        raise pytest.UsageError(f"--shard {spec}: need 0 <= I < N")
+    keep = [it for it in items if shard_of(it.nodeid, n) == i]
+    drop = [it for it in items if shard_of(it.nodeid, n) != i]
+    if drop:
+        config.hook.pytest_deselected(items=drop)
+        items[:] = keep
 
 FRAME = LocalFrame(40.0394, -105.2258, 1600.0)
 START = 1781532000.0  # 2026-06-15T14:00:00Z

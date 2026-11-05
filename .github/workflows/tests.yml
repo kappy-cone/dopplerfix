@@ -26,13 +26,21 @@ env:
   MPLBACKEND: Agg
 jobs:
   gate:
+    name: gate (${{ matrix.shard }}/4)
     runs-on: ubuntu-24.04              # pinned; bump deliberately when GitHub retires it
     timeout-minutes: 5
+    strategy:
+      fail-fast: false                 # one red shard should not hide the others' results
+      matrix:
+        shard: [0, 1, 2, 3]            # tests/conftest.py --shard: a hash of the test id, so every test
+                                       # runs in exactly one shard and new tests need no bookkeeping
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-env
       - name: Gate tests (fast, not heavy)
-        run: python -m pytest -m "not slow and not heavy" -n 4 -q -p no:cacheprovider --durations=10
+        run: >-
+          python -m pytest -m "not slow and not heavy" --shard ${{ matrix.shard }}/4 -n 4 -q
+          -p no:cacheprovider --durations=5
   after-merge:
     if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
