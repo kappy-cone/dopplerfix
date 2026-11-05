@@ -64,15 +64,32 @@ rules.
 
 ## 3. What the sources say
 What was verified, and how, is noted per item. Quotes are kept to short phrases.
-- **HMM / Viterbi frequency-line tracking** (Streit & Barrett, IEEE TASSP 1990; Paris & Jauffret, IEEE TAES
-  2003; abstracts). Luo & Shen, *A Sensing and Tracking Algorithm for Multiple Frequency Line Components in
-  Underwater Acoustic Signals*, Sensors 19(22):4866, 2019 (full text read).
-  - **Method:** frequency bins are the hidden states, with a Gaussian transition model and a maximum offset R
-    per frame. The observation likelihood is Rician (Bessel I0) when the SNR is known, or normalised power
-    otherwise. The path is found by Viterbi on *unthresholded* spectra. An amplitude decision only sets a
-    line's start and end. A coarse "high false alarm" pre-screen picks the sub-images to process.
-  - **For us:** keep the path likelihood and decide at the path level, never per column. The repo's DP is
-    already the Viterbi part. G1's per-column gate is what these trackers avoid.
+- **HMM / Viterbi frequency-line tracking.** Streit & Barrett (IEEE TASSP 1990) and Paris & Jauffret (IEEE TAES
+  2003) are known from abstracts. Luo & Shen, *A Sensing and Tracking Algorithm for Multiple Frequency Line
+  Components in Underwater Acoustic Signals*, Sensors 19(22):4866, 2019, was read in full (PDF).
+  - **Method:**
+    - Background equalisation first (an estimated noise floor is subtracted).
+    - A coarse "high false alarm" pre-screen picks the sub-images worth processing.
+    - Frequency bins are the hidden states, with a Gaussian transition model and a maximum offset R per frame.
+      The observation likelihood is Rician (Bessel I0) when the SNR is known, otherwise normalised power.
+    - Viterbi finds each line's path on the *unthresholded* spectrum.
+    - Only then is each point on the path checked (their eq. 15), by a "local 3σ criterion": a point counts if
+      its power exceeds the mean of its ±M neighbouring bins plus 3σ. That also sets the line's start and end.
+      For exponential noise (σ = mean) the bar is 4× the local mean, about 6 dB above the mean or 7.6 dB above
+      the median.
+  - **Results** (simulation; Pd and Pf counted per frequency point; SNR is the wideband line-spectrum SNR after
+    background equalisation, so not comparable with this repo's band or per-bin SNRs):
+    - Viterbi on the unthresholded image reaches Pd = 0.5 about 3 dB lower than "pre-detection clustering"
+      (detect per frame, then link). At −30 dB, Pd ≈ 0.85 against ≈ 0.25.
+    - The price is a false-point rate of about 0.08–0.1, against about 0, over −30 to −20 dB.
+    - Against a plain whole-image HMM: about 1–2 dB better, and 11.4 s against 44 s of compute.
+  - **For us:**
+    - Find the path before testing anything. The repo's DP already does that.
+    - Test points against a *local, noise-referenced* bar, about 6 dB over the local mean, rather than a fixed
+      12 dB above the median.
+    - Expect, and measure, more false points.
+
+    G1's fixed 12 dB gate sits about 4–6 dB above what this tracker uses.
 - **Track-before-detect** (Bossér, Lundberg Nordenvaad, Hendeby, Skog, *Broadband Passive Sonar
   Track-Before-Detect Using Raw Acoustic Data*, arXiv 2412.15727, Dec 2024; full text read).
   - **Method:** a Bernoulli filter with SNR as a state. A track is confirmed when the existence probability
@@ -120,6 +137,22 @@ What was verified, and how, is noted per item. Quotes are kept to short phrases.
   - **Real results (one site, blind):** 7 of 13 and 4 of 5 passes explained, with errors of 17 m and 114 m.
   - **For us:** the time-median background targets G4's stationary lines. Its recall on real piston and
     turboprop traffic, about 55–80 % of passes, is a useful reality check for milestone 4.5.
+- **Aircraft Doppler on a buried fibre** (Gurevich, Isaenkov, Erbe, Gavrilov, Sidenko, Tertyshnikov, Vorobev,
+  Pevzner, *Detection of aircraft noise using distributed acoustic sensing with a buried telecommunication
+  cable*, npj Acoustics 1:2, 2025; read in full).
+  - **Detection was by visual inspection** of spectrograms. The authors call it subjective judgement; no
+    automatic detector.
+  - **Noise removal** uses a median filter in two steps: first "vertical stripes" (broadband bursts), then
+    "horizontal stripes" (persistent narrow-band noise), each by estimating and subtracting a low-frequency
+    trend.
+  - **The model includes emission time** (their eq. 3). Curved paths near an airport are fitted as two
+    straight segments joined by an arc.
+  - **Fit accuracy** for one Saab 340B: d = 600 m against a 541 m altitude, speed 365 against 364.8 km/h, and
+    closest-approach time within 0.5 s of Flightradar24.
+  - **Range:** turboprops were detected out to about 2.5 km on a single channel. Jets were not detected, a
+    limitation of the instrument's 10 m gauge length.
+  - **For us:** an independent use of the same two-step background as Espaye's tool, i.e. D4. The ~2.5 km
+    turboprop range is a different sensor, so it is not a calibration for `audible_slant_m`.
 - **The two PDFs already reviewed** (AMOS 2018 satellite Doppler; Aydın 2018 passive-radar thesis):
   - CA-CFAR per pixel, then greedy cell-following with a persistence count and quadratic gap bridging.
   - These are weaker than what the repo has (amplitude discarded, no physical curve model). They are not
@@ -143,15 +176,17 @@ like arms a–c: seeds 0–49, the same six configs, paired by audio.
 - **Why first:** it decides between D2 and the fit-stage fixes, at the cost of a screen re-run.
 
 **D2. Path-level ridge acceptance (arm d). Targets G1, if D1 shows cause 1 dominates.**
-- **Change:** keep the DP path and replace the per-column 12 dB gate with a test on the whole path. A ridge is
-  accepted if its summed excess over its span exceeds a threshold set for a stated false-alarm rate per
-  window. The threshold comes from the same statistic on exponential noise, by fixed-seed Monte Carlo, as
-  arm a's baseline was made.
-- **Weak columns** are kept with weights rather than dropped. For example, a per-point σ_f from the column's
-  SNR: a tone's frequency error grows as SNR falls. The scorer can then down-weight them.
-- **Knob:** the false-alarm rate, a requirement with an a-priori meaning, not a dB value.
-- **Risks to measure:** spurious ridges per run, harmonic and half-order lock, and t0 bias from long weak
-  tails.
+- **Change:** keep the DP path, and in this arm replace the fixed per-column 12 dB gate with two tests:
+  - **The whole path.** A ridge is accepted if its summed excess over its span exceeds a threshold set for a
+    stated false-alarm rate per window. The threshold comes from the same statistic on exponential noise, by
+    fixed-seed Monte Carlo, as arm a's baseline was made.
+  - **Each point, against local noise.** Points are kept by Luo & Shen's local 3σ rule (mean of the ±M
+    neighbouring bins plus 3σ, about 6 dB over the local mean for exponential noise) instead of 12 dB above
+    the median. Kept weak points carry a per-point σ_f from their SNR, so the scorer can down-weight them.
+- **Knobs:** the false-alarm rate (a requirement with an a-priori meaning) and the 3σ multiplier (source: Luo
+  & Shen 2019, eq. 15). Neither is a tuned dB value. `ridge.weak_db` stays as it is for V0 and V1.
+- **Risks to measure:** spurious ridges per run (Luo & Shen's false-point rate rose to ~0.1), harmonic and
+  half-order lock, and t0 bias from long weak tails.
 
 **D3. Doppler-Hough detection (arm e). Targets G2 and seeds G1.**
 - **Change:** run `ridge.doppler_hough`, already bounded by `hough_v_range_mps`, `hough_tau_range_s` and
@@ -162,14 +197,17 @@ like arms a–c: seeds 0–49, the same six configs, paired by audio.
   clip-hour. A detection's best (v, τ, t0, f0) then guides `guided_ridge` directly, which should also help G1.
 - **Expected gain (rough, to be measured):** incoherent integration over N roughly independent frames
   improves deflection by about 5·log10 N dB. That's 6.5 dB for N = 20 one-second frames, minus the
-  look-elsewhere cost of the template bank, and minus what the 3 s smoothing already captures. Gains of
-  about 4–10 dB are typical of track-before-detect over frame-by-frame detection (cf. Bossér et al., ~4 dB).
+  look-elsewhere cost of the template bank, and minus what the 3 s smoothing already captures. The two
+  measured anchors are about 3 dB (Luo & Shen: Viterbi against detect-then-link) and about 4 dB (Bossér et al.:
+  track-before-detect against a CFAR tracker). A physical-curve template should do at least as well as those
+  generic motion models; expect a few dB, not 10.
 - **Cost:** the Hough over a whole clip is new compute; measure it against the 900 s cap.
 
 **D4. Transient-robust background (arm f). Targets G4; lower priority.**
 - **Change:**
-  - (i) Also subtract a per-frequency median over a long block (`detect.time_floor_s`, e.g. 40–120 s, as in
-    Espaye), to remove stationary lines such as hum before the frequency median.
+  - (i) Also subtract a per-frequency median over a long block (`detect.time_floor_s`, e.g. 40–120 s), to
+    remove stationary lines such as hum before the frequency median. Two independent systems do exactly this
+    two-step stripe removal: Espaye's tool and Gurevich et al. 2025.
   - (ii) Treat frames whose broadband level jumps (gusts, cars) as heavy-tailed. For example, cap their
     excess, or weight them down in D2/D3's sums (cf. the multivariate-t likelihood in Bossér et al.).
 - **Risk:** a long-block median eats a slowly drifting plateau. Keep the block longer than the plateau, and
@@ -193,7 +231,8 @@ like arms a–c: seeds 0–49, the same six configs, paired by audio.
 ## 5. Caveats
 - **Abstract-only sources:** Ferguson 1992, Ferguson & Quinn 1994 and Lo, Perry & Ferguson are known from
   their abstracts. Their full texts weren't available.
-- **The ~4 dB track-before-detect figure** is a single simulated comparison.
+- **The ~4 dB track-before-detect figure** is a single simulated comparison. Luo & Shen's ~3 dB is from
+  simulation with a wideband SNR definition.
 - **The integration-gain and ~20 dB trigger numbers** are back-of-envelope figures from the code and standard
   detection theory. They are not measured.
 - **Synthetic level model:** the level model puts synthetic events on a detection cliff (plan §8.0). Detection
@@ -202,6 +241,7 @@ like arms a–c: seeds 0–49, the same six configs, paired by audio.
 
 ## Sources
 - Luo & Shen, Sensors 19(22):4866 (2019): https://www.mdpi.com/1424-8220/19/22/4866
+- Gurevich et al., npj Acoustics 1:2 (2025): https://doi.org/10.1038/s44384-025-00007-8
 - Bossér et al., arXiv 2412.15727 (2024): https://arxiv.org/abs/2412.15727
 - Ferguson, JASA 92, 1403 (1992): https://pubs.aip.org/asa/jasa/article/92/3/1403/697032/A-ground-based-narrow-band-passive-acoustic
 - Ferguson & Quinn, JASA 96, 821 (1994): https://pubs.aip.org/asa/jasa/article/96/2/821/970519/Application-of-the-short-time-Fourier-transform
