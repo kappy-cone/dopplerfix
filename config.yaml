@@ -64,6 +64,12 @@ detect:
   chunk_s: 120.0             # audio processed in chunks: memory independent of clip length
   broadband_trigger: true
   manual_windows: []         # e.g. [{start_s: 100, end_s: 220, band_hz: [80, 260]}]
+  # U19 detection arms (plan §8.2): off here, so V0/V1 are unchanged; on only in the detection comparison.
+  # Sources in reports/apriori_registry.md, registered before the first measurement.
+  harmonic_stat: false       # (a) harmonic-summed tonal row per prop band (mean excess at f, 2f, ..., n·f)
+  harmonic_n: 3              # PROVISIONAL (as ridge.hough_harmonics): harmonics averaged by arm (a)
+  long_window_s: null        # (b) e.g. 3.0: prop bands also scored on a long-window spectrogram (slow props)
+  low_band_hz: null          # (c) e.g. [20, 100]: a separate row below the recording high-pass
 
 ridge:                       # prop band, main spectrogram
   max_up_hz_per_s: 4.0

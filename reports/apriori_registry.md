@@ -62,6 +62,29 @@ Implementation choices inside P1.1 (no new knob, recorded so they are not mistak
 - **Silence** (V1c): the probabilistic-silence penalty is added in nats, not per point.
 - **f0** is profiled as in the Huber loss (IRLS, k = `huber_k`, at σ_white), not re-maximised under the mixture.
 
+## U19 detection arms (session 6, plan §8.2; before the detection screen)
+
+Registered before the first measurement (the session-6 screen). Off by default, so V0 / V1 are unchanged; on only
+in the detection comparison. `detect.trigger_db`, `extend_db`, `min_duration_s` and every other existing
+threshold are untouched: the arms only add rows to the max-over-rows statistic.
+
+| Knob (config key) | Value when on | Source | Status | Sensitivity grid | Used by |
+|---|---|---|---|---|---|
+| `detect.harmonic_stat` | true (arm a) | plan §8.2 | mode | — | `detect.detect_events_audio` |
+| `detect.harmonic_n` | 3 | as `ridge.hough_harmonics` (the seeding matched filter's harmonic count) | PROVISIONAL | 2, 3, 5 | `detect.harmonic_statistic` |
+| `detect.long_window_s` | 3.0 (arm b) | plan §8.2 "2–4 s" (the doppler.txt resolution step); midpoint | PROVISIONAL | 2, 3, 4 | `detect.detect_events_audio` |
+| `detect.low_band_hz` | [20, 100] (arm c) | upper edge: the recording high-pass corner (`realism` scene, 100 Hz); lower edge: the conventional lower limit of audio | PROVISIONAL | lower edge 20, 30, 40 | `detect.DetectParams.prop_bands` |
+
+Implementation choices (no knob):
+- **Arm a.** Per frame, the max over fundamentals f in [lo, hi/n] of the mean excess at f, 2f, …, n·f. Each harmonic
+  takes the max of the 3 nearest bins, for bin quantization, as `ridge.hough_dilate_bins` does. Its noise
+  baseline is the mean of the same statistic on exponential noise (10·log10(E/ln 2)), by a fixed-seed Monte Carlo
+  on the band's own bin layout: the harmonic analogue of `theoretical_baseline_db`.
+- **Arm b.** The prop bands' plain tonal statistic on a spectrogram with the long window (same overlap). The
+  coarser frame grid is sampled at each main frame's nearest long frame.
+- **Arm c.** The low band is one more row of the main spectrogram's tonal statistic, so it gets its own
+  (smaller-N) noise baseline. The ridge search band (`detect.band_hz`) is unchanged.
+
 ## Later phases
 
 These entries are listed in plan P0.7 and are added to config.yaml only when their item is built:

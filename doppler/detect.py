@@ -47,6 +47,11 @@ class DetectParams:
     chunk_s: float = 120.0         # audio processed in chunks of this length (with overlap)
     broadband_trigger: bool = True # also detect broadband rises (jets) vs the clip's quiet level
     manual_windows: tuple = field(default_factory=tuple)
+    # U19 detection arms (plan §8.2), all off by default (V0 and V1 unchanged); values: reports/apriori_registry.md
+    harmonic_stat: bool = False    # (a) add a harmonic-summed tonal row per prop band
+    harmonic_n: int = 3            #     harmonics averaged (fundamental included), as ridge.hough_harmonics
+    long_window_s: float | None = None   # (b) add the prop bands on a long-window spectrogram (slow props)
+    low_band_hz: tuple | None = None     # (c) add this band as its own row (below the recording high-pass)
 
     @classmethod
     def from_dict(cls, d: dict) -> "DetectParams":
@@ -61,7 +66,14 @@ class DetectParams:
             kw["bands_hz"] = (kw["band_hz"],)
         if "manual_windows" in kw:
             kw["manual_windows"] = tuple(kw["manual_windows"] or ())
+        if kw.get("low_band_hz") is not None:
+            kw["low_band_hz"] = tuple(kw["low_band_hz"])
         return cls(**kw)
+
+    @property
+    def prop_bands(self) -> tuple:
+        """Bands scored on the main spectrogram: the configured ones plus the optional low band (arm c)."""
+        return self.bands_hz + ((tuple(self.low_band_hz),) if self.low_band_hz is not None else ())
 
 
 @dataclass(frozen=True)
@@ -101,6 +113,58 @@ def tonal_statistic(spec: Spectrogram, params: DetectParams) -> NDArray:
     return np.array(out)
 
 
+def _harmonic_rows(Z: NDArray, f_hz: NDArray, lo: float, hi: float, n_harm: int) -> NDArray:
+    """(T,) max over fundamentals f in [lo, hi/n] of the mean excess at f, 2f, …, n·f (3-bin max at each, for
+    bin quantization, as ridge.doppler_hough dilates). Harmonics of one source share a frame's Doppler ratio."""
+    from scipy.ndimage import maximum_filter1d
+
+    df = f_hz[1] - f_hz[0]
+    jf = np.flatnonzero((f_hz >= lo) & (f_hz <= hi / n_harm))
+    if len(jf) == 0:
+        return np.full(Z.shape[1], -np.inf)
+    Zd = maximum_filter1d(Z, size=3, axis=0, mode="nearest")
+    acc = np.zeros((len(jf), Z.shape[1]))
+    for k in range(1, n_harm + 1):
+        idx = np.clip(np.rint((k * f_hz[jf] - f_hz[0]) / df).astype(int), 0, len(f_hz) - 1)
+        acc += Zd[idx]
+    return (acc / n_harm).max(axis=0)
+
+
+def harmonic_statistic(spec: Spectrogram, params: DetectParams) -> tuple[NDArray, list[float]]:
+    """Arm (a), U19: (n_bands, T) harmonic-summed tonal excess per prop band, and each row's noise baseline.
+
+    The baseline is the typical value of the same statistic in pure noise (exponential power against its
+    median, 10·log10(E/ln 2)), by a fixed-seed Monte Carlo on the band's own bin layout: the harmonic analogue of
+    ``theoretical_baseline_db``. A statistics source, not a tuned number.
+    """
+    rows, theory = [], []
+    pad = params.floor_halfwidth_hz
+    for lo, hi in params.bands_hz:
+        sel = (spec.f_hz >= lo - pad) & (spec.f_hz <= hi + pad)
+        if not ((spec.f_hz >= lo) & (spec.f_hz <= hi)).any():
+            rows.append(np.full(spec.t_s.size, -np.inf))
+            theory.append(None)
+            continue
+        sub = Spectrogram(spec.t_s, spec.f_hz[sel], spec.power_db[sel], spec.window_s, spec.hop_s)
+        Z = sub.power_db - background_db(sub, params.floor_mode, params.floor_halfwidth_hz)
+        rows.append(_harmonic_rows(Z, sub.f_hz, lo, hi, params.harmonic_n))
+        theory.append(harmonic_noise_baseline_db(tuple(np.round(sub.f_hz, 6)), lo, hi, params.harmonic_n))
+    return np.array(rows), theory
+
+
+_HARM_THEORY: dict = {}
+
+
+def harmonic_noise_baseline_db(f_hz: tuple, lo: float, hi: float, n_harm: int, n_frames: int = 400) -> float:
+    """Mean over noise frames of the harmonic statistic (fixed seed 0; cached per bin layout)."""
+    key = (len(f_hz), f_hz[0], f_hz[-1], lo, hi, n_harm)
+    if key not in _HARM_THEORY:
+        rng = np.random.default_rng(0)
+        Z = 10 * np.log10(rng.exponential(size=(len(f_hz), n_frames)) / np.log(2))
+        _HARM_THEORY[key] = float(_harmonic_rows(Z, np.asarray(f_hz), lo, hi, n_harm).mean())
+    return _HARM_THEORY[key]
+
+
 def _bins_per_band(f_hz: NDArray, bands) -> list[int]:
     return [int(((f_hz >= lo) & (f_hz <= hi)).sum()) for lo, hi in bands]
 
@@ -111,17 +175,18 @@ def _runs(mask: NDArray) -> list[tuple[int, int]]:
 
 
 def windows_from_statistic(t_s: NDArray, raw: NDArray, n_bins: list[int], hop_s: float,
-                           params: DetectParams) -> tuple[list[EventWindow], NDArray]:
+                           params: DetectParams, theory_db: list | None = None) -> tuple[list[EventWindow], NDArray]:
     """Smooth, baseline-normalise per band, take the max over bands and cut windows.
 
-    Returns (windows, normalised statistic) — the statistic is useful for plots.
+    ``theory_db`` (optional, per row) replaces the max-over-n-bins noise level for rows whose statistic is not
+    a plain band maximum (the harmonic rows of arm a). Returns (windows, normalised statistic).
     """
     k = max(1, int(round(params.smooth_s / hop_s)) | 1)
     norm = []
-    for row, n in zip(raw, n_bins):
+    for i, (row, n) in enumerate(zip(raw, n_bins)):
         sm = median_filter(row, size=k, mode="nearest")
-        base = min(np.percentile(sm, params.baseline_percentile),
-                   theoretical_baseline_db(n) + params.baseline_theory_slack_db)
+        th = theory_db[i] if theory_db is not None and theory_db[i] is not None else theoretical_baseline_db(n)
+        base = min(np.percentile(sm, params.baseline_percentile), th + params.baseline_theory_slack_db)
         norm.append(sm - base)
     stat = np.max(norm, axis=0)
     windows: list[EventWindow] = []
@@ -182,31 +247,51 @@ def detect_events_audio(x: NDArray, fs_hz: float, spec_params: SpectrogramParams
     from .classify import broadband_series_db
 
     dur = len(x) / fs_hz
-    ov = spec_params.window_s + params.smooth_s
+    long_on = params.long_window_s is not None
+    ov = max(spec_params.window_s, params.long_window_s if long_on else 0.0) + params.smooth_s
     jet_on = bool(params.jet_bands_hz) and jet_spec_params is not None
     pj = replace(params, bands_hz=params.jet_bands_hz)
-    ts, raws, bbs, n_bins, hop = [], [], [], None, None
+    pm = replace(params, bands_hz=params.prop_bands) if params.low_band_hz is not None else params   # arm (c)
+    ts, raws, bbs, n_bins, theory, hop = [], [], [], None, None, None
     for a in np.arange(0.0, dur, params.chunk_s):
         b = min(a + params.chunk_s, dur)
         rng_s = (max(0.0, a - ov), min(dur, b + ov))
         sp = compute_spectrogram(x, fs_hz, spec_params, rng_s)
         keep = (sp.t_s >= a) & (sp.t_s < b) if b < dur else (sp.t_s >= a)
-        raw = tonal_statistic(sp, params)[:, keep]
-        nb = _bins_per_band(sp.f_hz, params.bands_hz)
+        raw = tonal_statistic(sp, pm)[:, keep]
+        nb = _bins_per_band(sp.f_hz, pm.bands_hz)
+        th = [None] * len(nb)
+
+        def pool(rows, t_src):
+            # max-pool a statistic on another frame grid over each main frame's span
+            idx = np.clip(np.searchsorted(sp.t_s[keep], t_src), 0, keep.sum() - 1)
+            out = np.full((rows.shape[0], keep.sum()), -np.inf)
+            for r in range(rows.shape[0]):
+                np.maximum.at(out[r], idx, rows[r])
+            return out
+
         if jet_on:
             sj = compute_spectrogram(x, fs_hz, jet_spec_params, rng_s)
-            rj = tonal_statistic(sj, pj)
-            # max-pool the jet statistic over each main frame's span
-            idx = np.clip(np.searchsorted(sp.t_s[keep], sj.t_s), 0, keep.sum() - 1)
-            pooled = np.full((rj.shape[0], keep.sum()), -np.inf)
-            for r in range(rj.shape[0]):
-                np.maximum.at(pooled[r], idx, rj[r])
-            raw = np.vstack([raw, pooled])
+            raw = np.vstack([raw, pool(tonal_statistic(sj, pj), sj.t_s)])
             nb = nb + _bins_per_band(sj.f_hz, params.jet_bands_hz)
+            th = th + [None] * len(params.jet_bands_hz)
+        if params.harmonic_stat:                                     # arm (a)
+            rh, thh = harmonic_statistic(sp, params)
+            raw = np.vstack([raw, rh[:, keep]])
+            nb = nb + [1] * len(thh)
+            th = th + thh
+        if long_on:                                                  # arm (b)
+            sl = compute_spectrogram(x, fs_hz, replace(spec_params, window_s=params.long_window_s), rng_s)
+            # the long-window grid is coarser than the main one: each main frame takes its nearest long frame
+            j = np.clip(np.searchsorted(sl.t_s, sp.t_s[keep]), 1, len(sl.t_s) - 1)
+            j -= (sp.t_s[keep] - sl.t_s[j - 1]) < (sl.t_s[j] - sp.t_s[keep])
+            raw = np.vstack([raw, tonal_statistic(sl, params)[:, j]])
+            nb = nb + _bins_per_band(sl.f_hz, params.bands_hz)
+            th = th + [None] * len(params.bands_hz)
         raws.append(raw)
         bbs.append(broadband_series_db(sp.power_db[:, keep], sp.f_hz, broadband_band_hz))
         ts.append(sp.t_s[keep])
-        n_bins, hop = nb, sp.hop_s
+        n_bins, theory, hop = nb, th, sp.hop_s
     t = np.concatenate(ts)
     raw = np.concatenate(raws, axis=1)
     bb = np.concatenate(bbs)
@@ -215,5 +300,6 @@ def detect_events_audio(x: NDArray, fs_hz: float, spec_params: SpectrogramParams
         # clip that is loud throughout — tonal rows still cover that case
         raw = np.vstack([raw, bb[None, :]])
         n_bins = list(n_bins) + [10**9]
-    wins, stat = windows_from_statistic(t, raw, n_bins, hop, params)
+        theory = list(theory) + [None]
+    wins, stat = windows_from_statistic(t, raw, n_bins, hop, params, theory)
     return Detection(sorted(_manual(params) + wins, key=lambda w: w.start_s), t, stat, bb, tuple(broadband_band_hz))

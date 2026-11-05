@@ -54,3 +54,54 @@ def test_ridge_on_second_harmonic_flags_subharmonic():
     truth2 = ph.straight_freq_received(r.t_s, 2 * f0, v, d, t0)
     assert np.median(np.abs(r.f_hz - truth2)) < 0.5
     assert r.subharmonic == 2
+
+
+# ---------------------------------------------------------------------------
+# U19 detection arms (plan §8.2): each finds a weak signal of its kind that the base statistic misses, adds no
+# detection on pure noise, and is off by default
+# ---------------------------------------------------------------------------
+SP4K = audio.SpectrogramParams(4000, 1.0, 0.9, 1900.0)
+BASE = detect.DetectParams(min_duration_s=10, broadband_trigger=False)
+
+
+def _n_windows(x, fs, **arm):
+    from dataclasses import replace
+
+    return len(detect.detect_events_audio(x, fs, SP4K, replace(BASE, **arm)).windows)
+
+
+def test_detection_arms_are_off_by_default():
+    p = detect.DetectParams()
+    assert not p.harmonic_stat and p.long_window_s is None and p.low_band_hz is None
+    assert p.prop_bands == p.bands_hz
+
+
+@pytest.mark.parametrize("arm", [{"harmonic_stat": True}, {"long_window_s": 3.0}, {"low_band_hz": (20.0, 100.0)}])
+def test_detection_arms_find_nothing_in_pure_noise(arm):
+    for s in (1, 2, 3):
+        assert _n_windows(np.random.default_rng(s).standard_normal(120 * 4000), 4000, **arm) == 0
+
+
+def test_harmonic_arm_finds_a_weak_harmonic_stack():
+    x, fs = _chirp_audio(f0=150.0, snr_bin_amp=0.36, harmonics=(1.0, 1.0, 1.0))   # every Doppler tone above 100 Hz
+    assert _n_windows(x, fs) == 0 and _n_windows(x, fs, harmonic_stat=True) == 1
+
+
+def test_long_window_arm_finds_a_slow_far_prop():
+    x, fs = _chirp_audio(f0=140.0, v=40.0, d=3000.0, snr_bin_amp=0.3, harmonics=(1.0,))
+    assert _n_windows(x, fs) == 0 and _n_windows(x, fs, long_window_s=3.0) == 1
+
+
+def test_low_band_arm_finds_a_weak_tone_below_100_hz():
+    x, fs = _chirp_audio(f0=70.0, v=50.0, d=800.0, snr_bin_amp=0.34, harmonics=(1.0,))
+    assert _n_windows(x, fs) == 0 and _n_windows(x, fs, low_band_hz=(20.0, 100.0)) == 1
+
+
+def test_harmonic_noise_baseline_is_deterministic_and_matches_noise():
+    f = tuple(np.arange(20.0, 921.0, 1.0))
+    a = detect.harmonic_noise_baseline_db(f, 40.0, 900.0, 3)
+    detect._HARM_THEORY.clear()
+    assert detect.harmonic_noise_baseline_db(f, 40.0, 900.0, 3) == a
+    rng = np.random.default_rng(7)
+    Z = 10 * np.log10(rng.exponential(size=(len(f), 300)) / np.log(2))
+    assert detect._harmonic_rows(Z, np.asarray(f), 40.0, 900.0, 3).mean() == pytest.approx(a, abs=0.2)
