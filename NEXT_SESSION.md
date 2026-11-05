@@ -1,26 +1,34 @@
-# Prompt for the next session (session 5, new machine)
+# Prompt to continue the PC session (session 5, after Stage A)
 
-Paste the block below as the first message of the new Claude Code session, run from the repo root.
+Paste the block below into the running session on the PC, after `git pull --rebase`.
 
 ```
-Read CLAUDE.md, then HANDOFF.md (start at "START HERE"), before doing anything else. Then read
-reports/combined_plan.md (§3 plan, §4 and §7 settled decisions), reports/ablation_pilot.md and
-reports/apriori_registry.md. All 17 user decisions are already settled in §7; do not reopen them.
+Pull first (git pull --rebase), then read reports/combined_plan.md §8 (the amendment after Stage A)
+and reports/stageA.md. §8 sets the order for this session; accuracy and functionality outrank cost.
 
-This is a new machine. First set it up and verify:
-1. Create the venv from requirements.txt; fetch the geoid grids into data/proj and
-   outputs/plotly.min.js as HANDOFF describes (check the sha256).
-2. Run the fast tests (pytest -m "not slow"), then the slow ones, and report the results.
-3. Create the as-designed worktree: git worktree add ../qgis-asdesigned variants-asdesigned.
-4. Tell me this machine's core count and RAM, and re-estimate Stage A wall time from the
-   pilot timings in reports/ablation_pilot.md.
+Decisions: U18 and U19 in §8.5 are approved (already recorded in the plan).
 
-Then stop and ask me how to run Stage A, before starting it. Options: run it as is at a suitable
---jobs; lower the 900 s per-run cap; or first profile score.rank_cells (the scoring hot spot;
-CLAUDE.md says flag hot spots before using numba or multiprocessing).
+Step 1, §8.1 measurement fixes: reporting only; re-summarise the existing Stage A rows, no re-run.
+Add to doppler/evaluate.py and the ablate summary, with tests:
+- detection recall per config;
+- a `detection` failure class reported beside the pre-registered taxonomy (don't change the rule);
+- conditional accuracy (runs where every truth event was detected);
+- rank-1 accuracy ignoring status;
+- answer rate;
+- the paired continuous tests from plan §3.0 (rank-1 error, true-assignment rank, Δcost).
+Hand-check at least 5 Stage A rows against their kept truth and events before trusting the new metrics.
+Write the results into reports/stageA.md as an addendum.
 
-Constraints: keep both design variants runnable and compared; never tune provisional values on
-synthetic data (registry rule); run Stage A only on a clean, committed tree; commit or push only
-when I ask. I'll set up OpenSky credentials myself in pyopensky's own config; if Trino access isn't
-granted by the time we need it, fall back to https://opensky-network.org/data/scientific.
+Step 2, Phase 1 starting with P1.1, as a comparison arm, never a new default. Its acceptance test is U18:
+on all-on C, n = 100 paired seeds (0-99; add an ablation plan for seeds 50-99 so Stage A's 0-49 are reused),
+precision of unique must beat the 44 % status-ignored baseline without lowering rank-1 accuracy, and the
+answer rate is reported. Add any new knob to reports/apriori_registry.md before its first measurement.
+
+Step 3, §8.2 detection item (U19), alongside Phase 1, measured on recall and false events. Don't touch
+detect.trigger_db or any other provisional threshold.
+
+Rules: keep V0 and V1 runnable and compared; never tune provisional values on synthetic data; don't edit
+code in a checkout while an ablation is running from it (use a separate worktree); run decision ablations
+on a clean, committed tree; commit or push only when I ask. Stop and ask before any change to a CLAUDE.md
+methodology step beyond U18/U19.
 ```
