@@ -1,76 +1,68 @@
-# Prompt to continue the PC session (session 6, U19 detection)
+# Prompt for the next session (session 7, U19 detection: step 3 onward)
 
-Paste the block below into the PC session once any run in progress has finished.
+Paste the block below as the first message of the session, run from the repo root on the compute machine.
 
 ```
-Pull first (git pull --rebase on main), then read CONTRIBUTING.md §7 (new), reports/combined_plan.md
-§8.2-8.4, and the U18 section at the end of reports/stageA.md.
+Pull first (git pull --rebase on main), then read, in order:
+- CLAUDE.md (incl. the personal-details rule in Conventions) and CONTRIBUTING.md (§1 branches/PRs, §4 decision
+  runs, §7 CI: the ~30 s gate on every push, heavy + slow after merge);
+- HANDOFF.md START HERE;
+- reports/u19.md (steps 1-2 and the brainstorm at its end);
+- docs/u19_detection_literature.md (D1-D5);
+- reports/combined_plan.md §8.2-8.5, and the U18 section at the end of reports/stageA.md.
 
-What changed on main since your U18 commit (b984ce8). Two PRs, both reviewed by a separate session:
+State on main:
+- U19 arms in doppler/detect.py, off by default (V0/V1 rows bit-identical): (a) harmonic-summed row,
+  (b) 3 s long-window rows, (c) 20-100 Hz low-band row. Knobs in reports/apriori_registry.md.
+- Step 2 screen (detection only, seeds 0-49, six configs, paired by audio): only arm b matters. All-on recall
+  75 -> 82/100 (7 gained, 0 lost, p = 0.016), loo:path +13, sub:reflection +10, spurious per run not up.
+  Arm a: no effect. Arm c: loo:path only. No arm recovers the 14 all-on misses lost after detection.
+- Brainstorm findings (reports/u19.md):
+  - F1: recall falls off a cliff below ~6 dB band SNR, and half the synthetic events sit there;
+  - F2: 6 of the 14 lost-after-detection misses look like mis-timed fits;
+  - F3: perfect detection would lift V1 rank-1 accuracy from 34 to about 48/100 at most, and arm b alone by
+    only a few runs.
+- Screen harness: reports/experiments/u19/screen.py and summarize.py. Screen rows stay in outputs/.
 
-1. #1 CI (291164b): .github/workflows/tests.yml, .github/actions/setup-env/action.yml, CONTRIBUTING §7.
-   - Actions moved to Node 24 versions; the runner is pinned to ubuntu-24.04.
-   - Docs-only changes (*.md, reports/, docs/, doppler.txt) skip CI.
-   - The fast suite runs in three parallel shards (about 3.5 min): the four
-     test_true_cell_ranks_first_after_locked_scoring cases in two pairs, and everything else.
-   - The slow suite runs only when started by hand:
-     gh workflow run tests.yml --ref <branch>
-   - §7: a red fast run blocks a merge, and you never mark a test slow or xfail to get green. Branch
-     protection stays off until about 10 PRs pass without a false alarm.
-   - No code changed.
+Tasks, in order:
+1. D1 + E1 diagnostics (reporting only, no knob):
+   - D1: classify each "window but no matched fit" miss by where it was lost (ridge returned nothing, fit
+     rejected, fit > 10 s from the truth, removed by dedupe / harmonic check, too slow), and arm b's remaining
+     window-less misses.
+   - E1, oracle ladder: truth windows given as manual windows, then truth-derived ridge points. Diagnostics
+     only, never a run claim.
+   - Same six configs, seeds 0-49, base and arm b. Add recall against band SNR (E3) to summarize.py.
+   - Write the results into reports/u19.md. Commit, push the branch.
+2. Step 3: write a pre-registered acceptance rule for arm b into reports/u19.md, then STOP for my OK.
+   - Variants: V1b = V1 + detect.long_window_s 3.0, and V0b likewise (V0 stays compared).
+   - Starting point to refine (justify every number a priori; nothing tuned):
+     - all-on detection recall on seeds 0-99 up, exact paired sign test on truth events;
+     - spurious events per run not up by more than a bound you propose (base all-on 0.52);
+     - V1b rank-1 accuracy (status ignored) on all-on C n = 100 not lower than V1's 34; by F3 a gain can't be
+       demonstrated at this n, so it is a non-inferiority condition;
+     - report timeouts, answer rate, precision of unique, conditional accuracy and the detection class
+       (the §8.1 measures).
+   - Adding the V1b / V0b overlays changes config.yaml. Do it in this step, before the decision run, so the
+     config hash stays stable from then on.
+3. After my OK and the merge: the decision run from clean main. Run V1b and V0b on all-on C seeds 0-99, paired
+   with the Stage A + U18 rows (reports/data/). Report the §8.1 measures and recall against SNR.
+4. Only then, and only if D1/E1 point there: build D2 (path-level ridge acceptance), E2 (fuse the 3 s excess
+   into the ridge DP on plateaus) or D3 (Doppler-Hough detection) as new arms. Each follows the same rules:
+   - registered before its first measurement;
+   - off by default;
+   - screened on the six configs, seeds 0-49, paired by audio.
 
-2. #2 real-data groundwork (31ebc79): doppler/tracks.py, tests/test_opensky.py, and docs/field_recordings.md,
-   opensky_ingest.md, pyopensky_dependency.md, uat_coverage.md.
-   - normalize_frame now recognises raw OpenSky state-vector tables (columns time + lastposupdate) and types
-     them: times become epoch seconds, flags become bool, squawk stays a string.
-   - It adds a bool `onground` column, which is flagged but never filtered.
-   - It refuses frames renamed by the traffic library (altitude/groundspeed/vertical_rate, possibly in ft or kt)
-     unless they are mapped explicitly.
-   - Alias keys now match case-insensitively.
-   - V0/V1 are unaffected. Synthetic and ablation frames have no `time` column, so they never take the new
-     path. The reviewer compared prepared tracks on main and on the PR: 42 comparisons, 0 differences.
-     A test now pins this. Stage A and U18 rows remain valid references.
-   - The cropped OpenSky aircraft DB exists only on the laptop's main checkout (data/aircraft_db.csv,
-     data/doc8643_types.csv; gitignored). Synthetic scenarios always carry their own registry, so this
-     cannot change synthetic results anywhere.
+Rules:
+- Branches and merges: one branch (s7-u19-step3), commits per step with the gate green, a PR. Don't push to
+  main without asking.
+- Runs: decision runs only from clean main. Never edit code in a checkout while a run uses it (use a
+  worktree). Screens only rule ideas out; never re-run just the seeds that failed.
+- Values: keep V0 and V1 runnable and compared. Never move detect.trigger_db, ridge.weak_db or any
+  provisional value. Never tune on synthetic data.
+- Stop and ask before any change to a CLAUDE.md methodology step beyond U18/U19.
+- Config items that wait for me until after U19's decision run:
+  - aircraft_types.type_table_path: data/doc8643_types.csv (real tracks only);
+  - whether to add tracks.drop_onground (a config key and a TrackParams field together).
 
-Working rules from here: one branch (s6-u19-detection), commits per step with the fast tests passing, and a PR
-with CI green. Dispatch the slow suite on the branch before asking for a merge. The decision run happens
-only from a clean main after the merge. U18 went straight to main with my OK; don't repeat that without
-asking.
-
-U19 task (plan §8.2, approved). Detection caps accuracy: 20 of the 50 all-on Stage A runs lose a truth event
-(recall 75/100 on seeds 0-49, 81/100 on seeds 50-99), and those runs account for 8 of V1's 13
-discrimination failures.
-1. Build the §8.2 candidates as detection arms behind config flags, off by default in V0 and V1 (so the V0/V1
-   rows stay bit-identical):
-   (a) a harmonic-summed tonal statistic (prop harmonic stacks, as ridge.doppler_hough sums for seeding);
-   (b) a long-window (2-4 s) spectrogram pass for slow props;
-   (c) a lower-band pass below the 100 Hz recording high-pass.
-   Don't move detect.trigger_db or any other provisional threshold. Every new knob goes into
-   reports/apriori_registry.md, with its a-priori source, before its first measurement. Tests for each arm,
-   on synthetic fixtures generated at test time.
-2. Screen, on detection only: run event detection without the cascade on seeds 0-49. Use the configs clean,
-   all-on, path, levels, scene and sub:reflection (§8.4). Report, paired by seed against Stage A:
-   - recall (truth events detected / truth events);
-   - runs with an event missed;
-   - spurious events per run.
-   Screens only rule ideas out, and never re-run just the seeds that failed.
-3. Before any decision run, write a pre-registered acceptance rule into reports/stageA.md (or a new
-   reports/u19.md) and stop for my OK. For example: all-on recall up (exact paired test), spurious events per
-   run not up by more than an amount you propose, and V1 rank-1 accuracy (status ignored) on all-on C n = 100
-   not lower than 34. More detections mean more hypotheses and timeouts, so report timeouts and the answer
-   rate too.
-4. After my OK and the merge: the decision run from clean main, paired with the Stage A + U18 rows. Report the
-   §8.1 measures, including conditional accuracy and the detection class.
-
-Housekeeping, in its own small commit:
-- update HANDOFF (START HERE for session 6; the fast suite now takes about 3-4.5 min locally, not ~45 s).
-- Leave config.yaml alone until U19's decision run is done, so the config hash in the rows stays stable.
-- After that, two config items wait for me:
-  - aircraft_types.type_table_path: data/doc8643_types.csv (affects only real tracks);
-  - whether to add tracks.drop_onground (needs a config key and a TrackParams field together; test_config
-    requires both).
-
-Stop points: after step 2 (screen results), and after step 3 (acceptance rule).
+Stop points: after task 1 (diagnostics), after task 2 (acceptance rule), after task 3 (decision run).
 ```
