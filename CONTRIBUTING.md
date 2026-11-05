@@ -24,6 +24,12 @@ conventions keep that safe. They add to CLAUDE.md (methodology, rules) and the p
   session can review it.
 - **Never commit credentials or local config** (OpenSky settings, `.env`, tokens). Check `git status` and
   the diff before each push.
+- **No personal or machine details in any committed file** (the repo is public). That means no hardware specs
+  (CPU, cores, RAM, GPU, disk), hostnames, OS usernames, home-directory or temp paths, email addresses or names.
+  Use neutral terms ("the compute machine", "the laptop") and placeholders (`<repo>`, `<scratch>`, relative
+  paths). Before each push, scan the staged diff, e.g.
+  `git diff --cached | grep -inE "/Users/|/home/|/private/tmp|@[a-z0-9.-]+\.(edu|com)|cores|threads|[0-9]+ ?GB"`,
+  and check every hit. This applies to text a subagent or another session produced, too.
 
 ## 3. Review
 - **Review at the plan's checkpoints, not on every push.** For example, after each numbered step of a session
