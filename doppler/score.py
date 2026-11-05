@@ -134,26 +134,33 @@ def modeled_ratio(mic_xyz: NDArray, track: int, ts: TrackSet, t_rx_s: NDArray, c
     received time past the segment end (whose emission time is r/c earlier and
     inside the data) still converges; only the final sample is unclamped.
     """
+    # Hot path (≈ 75 % of V1 run time, profiled in session 5): one scalar track index, clamping with
+    # maximum/minimum and the norm as sqrt(Σ x²), each bit-identical to np.clip / np.linalg.norm here but
+    # without their per-call overhead on these small arrays.
     P = np.asarray(mic_xyz, float).reshape(1, 3)
     tr = np.asarray(t_rx_s, float)
-    k = np.full(tr.shape, int(track))
+    k = int(track)
     lo, hi = ts.coverage(track)
     if not np.isfinite(lo):
         nan = np.full(tr.shape, np.nan)
         return nan, nan, nan, np.zeros(tr.shape, bool)
     hi_c = max(lo, hi - 1e-6)
-    A, _ = ts.sample(k, np.clip(tr, lo, hi_c))
-    te = tr - np.linalg.norm(A - P, axis=-1) / c
+
+    def norm(x):
+        return np.sqrt(np.add.reduce(x * x, axis=-1))
+
+    A, _ = ts.sample(k, np.minimum(np.maximum(tr, lo), hi_c))
+    te = tr - norm(A - P) / c
     for _ in range(n_iter):
-        A, V = ts.sample(k, np.clip(te, lo, hi_c))
+        A, V = ts.sample(k, np.minimum(np.maximum(te, lo), hi_c))
         rel = A - P
-        r = np.linalg.norm(rel, axis=-1)
+        r = norm(rel)
         rdot = np.einsum("...k,...k->...", rel, V) / r
         g = te + r / c - tr
         te = te - np.where(np.isfinite(g), g / (1.0 + rdot / c), 0.0)
     A, V = ts.sample(k, te)
     rel = A - P
-    r = np.linalg.norm(rel, axis=-1)
+    r = norm(rel)
     rdot = np.einsum("...k,...k->...", rel, V) / r
     ratio = c / (c + rdot)
     return ratio, te, r, np.isfinite(ratio)

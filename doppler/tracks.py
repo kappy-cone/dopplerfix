@@ -301,7 +301,12 @@ class TrackSet:
 
         ``k`` broadcasts against ``t`` (e.g. k (P, 1), t (P, M)). Outside a track's
         coverage the result is NaN, so callers can mask.
+
+        A scalar ``k`` indexes that track's rows directly (the scoring hot path: same arithmetic, no
+        broadcast of ``k``; profiled in session 5).
         """
+        if np.ndim(k) == 0:
+            return self._sample_one(int(k), np.asarray(t, float))
         k, t = np.broadcast_arrays(np.asarray(k), np.asarray(t, float))
         u = (t - self.t0_s) / self.dt_s
         i0 = np.floor(u).astype(np.int64)
@@ -311,6 +316,21 @@ class TrackSet:
         w = (u - i0c)[..., None]
         p = (1 - w) * self.xyz[k, i0c] + w * self.xyz[k, i0c + 1]
         v = (1 - w) * self.vel[k, i0c] + w * self.vel[k, i0c + 1]
+        p[~ok] = np.nan
+        v[~ok] = np.nan
+        return p, v
+
+    def _sample_one(self, k: int, t: NDArray) -> tuple[NDArray, NDArray]:
+        """``sample`` for one track: identical interpolation, indexing row ``k`` once."""
+        u = (t - self.t0_s) / self.dt_s
+        i0 = np.floor(u).astype(np.int64)
+        T = self.xyz.shape[1]
+        ok = (i0 >= 0) & (i0 + 1 < T)
+        i0c = np.minimum(np.maximum(i0, 0), T - 2)
+        w = (u - i0c)[..., None]
+        X, V = self.xyz[k], self.vel[k]
+        p = (1 - w) * X[i0c] + w * X[i0c + 1]
+        v = (1 - w) * V[i0c] + w * V[i0c + 1]
         p[~ok] = np.nan
         v[~ok] = np.nan
         return p, v
