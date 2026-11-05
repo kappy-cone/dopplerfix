@@ -82,3 +82,27 @@ conventions keep that safe. They add to CLAUDE.md (methodology, rules) and the p
 - **The compute machine** runs ablations and other compute-heavy work.
 - **The laptop** handles analysis, docs, review sessions and QGIS.
 - Either can write code, on its own branch.
+
+## 7. CI policy
+- **What CI checks** (`.github/workflows/tests.yml`):
+  - the fast suite (`pytest -m "not slow"`) on every pull request and every push to `main`, on a pinned
+    runner image and Python 3.12 with the pinned `requirements.txt`. It runs in three parallel shards (two
+    for the locked-scoring tests, one for everything else); the target is under about 5 minutes
+    wall-clock per run;
+  - nothing on changes that touch only documentation (`*.md`, `reports/`, `docs/`, `doppler.txt`);
+  - the slow suite (`pytest -m slow`) only when started by hand: Actions tab → tests → Run workflow, or
+    `gh workflow run tests.yml --ref <branch>`. Run it there, or locally, before asking for a merge (§2).
+- **What CI does not check:** decision runs and ablations, QGIS (the template test only reads the
+  project file), real data, other Python versions, and the rules a reviewer checks by hand (§3).
+- **What blocks a merge:** a red fast-suite run on the PR's latest commit. A failure is fixed on the branch,
+  or shown to be a false alarm (runner or network trouble, not the code) and re-run. It is never skipped by
+  marking a test slow or `xfail` just to get green: moving a test between suites is a reviewed change with
+  its own reason. A missing geoid-grid warning is not a failure (the test skips), but say so in the PR.
+  If the warning appears although the cache was hit, the cached folder is bad. Bump the cache key
+  (`proj-grids-v1` → `v2`, in `.github/actions/setup-env/action.yml`) so the grids are fetched again.
+- **Branch protection stays off** until CI has run on about 10 real PRs without a false alarm. Until then a
+  red run is read by a person, and the user decides whether it blocks. Record false alarms in the PR they
+  happened on. When protection is turned on, make the three `fast (…)` checks required; because docs-only PRs
+  skip the workflow, either drop `paths-ignore` then or add a no-op job with the same check names.
+- **Keep it cheap:** if the fast suite grows past about 5 minutes, find the slow tests in the run log's
+  `--durations` table and fix the cause first; another shard or a move to the slow suite is a last resort.

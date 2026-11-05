@@ -1,0 +1,45 @@
+# Shared setup for the test jobs in .github/workflows/tests.yml: Python + pinned requirements + geoid grids.
+name: setup-env
+description: Install Python and requirements.txt, and restore (or fetch) the geoid grids into data/proj.
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v7
+      with:
+        python-version: "3.12"            # the venv's version (requirements.txt header)
+        cache: pip                        # keyed on requirements.txt
+    - name: Install dependencies
+      shell: bash
+      run: pip install -r requirements.txt
+    # Geoid grids (CLAUDE.md Known pitfalls). tests/test_geo.py skips its grid test without them, so a
+    # failed fetch must not fail CI, but it must be visible, and an empty folder must never be cached.
+    - name: Restore geoid grids
+      id: proj
+      uses: actions/cache/restore@v6
+      with:
+        path: data/proj
+        key: proj-grids-v1
+    - name: Fetch geoid grids
+      if: steps.proj.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        mkdir -p data/proj
+        for f in us_noaa_g2018u0 us_nga_egm96_15; do
+          pyproj sync --file "$f" --target-directory data/proj \
+            || echo "::warning::pyproj sync failed for $f; the geoid grid test will skip"
+        done
+    - name: Check geoid grids
+      id: grids
+      shell: bash
+      run: |
+        if [ -f data/proj/us_noaa_g2018u0.tif ] && [ -f data/proj/us_nga_egm96_15.tif ]; then
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "::warning::geoid grids missing from data/proj; tests/test_geo.py will skip its grid test"
+        fi
+    - name: Save geoid grids
+      if: steps.proj.outputs.cache-hit != 'true' && steps.grids.outputs.ok == 'true'
+      uses: actions/cache/save@v6
+      with:
+        path: data/proj
+        key: proj-grids-v1
