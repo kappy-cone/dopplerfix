@@ -1,4 +1,4 @@
-"""Command line: synth | events | tracks | locate | verify-result.
+"""Command line: synth | events | tracks | adsblol | locate | verify-result.
 
     python cli.py synth  --config config.yaml --out outputs/synth_seed0 [--seed 0] [--event-times 150,420]
     python cli.py events --config config.yaml --audio outputs/synth_seed0/audio.wav [--out events.json]
@@ -438,6 +438,46 @@ def cmd_tracks(args) -> int:
     span = (min(t.t_s[0] for t in prepared), max(t.t_s[-1] for t in prepared)) if prepared else (np.nan, np.nan)
     print(f"{n_air} aircraft, {len(prepared)} gap-free segments, classes {cls}, altitude source {alt}")
     print(f"time span {pd.Timestamp(span[0], unit='s', tz='UTC')} .. {pd.Timestamp(span[1], unit='s', tz='UTC')}")
+    return 0
+
+
+def cmd_adsblol(args) -> int:
+    """Stream an adsb.lol daily archive (its split tar parts) and keep only the region and time window.
+
+    Writes canonical track Parquet (``--out``) and, from the archive's database fields, a registry CSV
+    (``<out stem>_types.csv``: icao24, typecode, registration) for aircraft_types. The archive is read in one
+    pass and never unpacked to disk (docs/adsblol_ingest.md). A single ``-`` reads the whole tar from stdin, so
+    the parts need not be stored: ``(curl -sSfL <aa>; curl -sSfL <ab>) | python cli.py adsblol - ...``.
+    """
+    from doppler import adsblol, export
+
+    cfg = load_config(args.config)
+    p = adsblol.AdsbLolParams.from_dict(section(cfg, "adsblol"))
+    _, region = load_region(cfg, args.region)
+    lon_lo, lat_lo, lon_hi, lat_hi = region.bounds
+    bbox = adsblol.padded_bbox(lat_lo, lat_hi, lon_lo, lon_hi, p.margin_m)
+    t_lo = pd.Timestamp(args.start).tz_localize("UTC").timestamp() if pd.Timestamp(args.start).tz is None \
+        else pd.Timestamp(args.start).timestamp()
+    t_hi = pd.Timestamp(args.end).tz_localize("UTC").timestamp() if pd.Timestamp(args.end).tz is None \
+        else pd.Timestamp(args.end).timestamp()
+    if t_hi <= t_lo:
+        print("--end must be after --start", file=sys.stderr)
+        return 2
+    src = sys.stdin.buffer if args.parts == ["-"] else args.parts
+    frames, types = [], []
+    for df, row in adsblol.extract(export.iter_archive_json(src), bbox, t_lo - p.pad_s, t_hi + p.pad_s, p):
+        frames.append(df)
+        if row:
+            types.append(row)
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tracks_df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=adsblol.COLUMNS)
+    export.write_parquet(tracks_df[adsblol.COLUMNS], out)
+    pd.DataFrame(types, columns=["icao24", "typecode", "registration"]).drop_duplicates("icao24").to_csv(
+        out.with_name(out.stem + "_types.csv"), index=False)
+    n_air = tracks_df["icao24"].nunique()
+    print(f"{len(tracks_df)} fixes from {n_air} aircraft ({len(types)} with a type code) in "
+          f"{bbox[0]:.3f}..{bbox[1]:.3f} N, {bbox[2]:.3f}..{bbox[3]:.3f} E -> {out}")
     return 0
 
 
@@ -1910,6 +1950,16 @@ def main(argv=None) -> int:
     t.add_argument("--tracks", required=True)
     t.add_argument("--registry", help="aircraft registry CSV (default: aircraft_types.registry_path)")
     t.set_defaults(func=cmd_tracks)
+
+    j = sub.add_parser("adsblol", help="crop an adsb.lol daily archive (split tar parts) to a region and window")
+    j.add_argument("parts", nargs="+", help="the day's archive parts, e.g. v2026.11.04-planes-readsb-prod-0.tar.a*, "
+                   "or - to read the whole tar from stdin")
+    j.add_argument("--config", default="config.yaml")
+    j.add_argument("--region", help="search region name (default region.name)")
+    j.add_argument("--start", required=True, help="window start, ISO 8601 (naive = UTC)")
+    j.add_argument("--end", required=True, help="window end, ISO 8601 (naive = UTC)")
+    j.add_argument("--out", required=True, help="track Parquet to write (data/ is gitignored)")
+    j.set_defaults(func=cmd_adsblol)
 
     g = sub.add_parser("regions", help="list or add search regions (inputs/search_regions.gpkg)")
     g.add_argument("action", choices=["list", "add"])
