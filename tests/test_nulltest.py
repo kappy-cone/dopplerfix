@@ -99,7 +99,7 @@ def test_summary_when_the_real_search_has_no_candidate():
     assert nt.summarize(_best(0, 0, n_candidates=0), [(0.5, 300.0, _best(0, 0, n_candidates=0))])["n_shifted_not_worse"] == 0
 
 
-@pytest.mark.heavy                 # ~20 s locally (four cascade + scoring runs): after merge, not in the gate
+@pytest.mark.heavy                 # ~100 s locally (four cascade + scoring runs; measured 2026-11-06): after merge only
 def test_unshifted_search_reproduces_the_ranking_and_shifts_fit_worse():
     """search() at shift 0 gives the same rank 1 as scoring the cascade survivors directly (the locate path);
     on a clean two-event scenario every shifted timing ranks below the real one."""

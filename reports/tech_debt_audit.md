@@ -31,8 +31,8 @@ Each item is scored with **Priority = (Impact + Risk) × (6 − Effort)**, each 
 | 10 | `reports/experiments/` is never imported by CI (`paths-ignore: reports/**`) | Test | 1 | 2 | 1 | **15** |
 | 11 | `score.py` imports `cascade._refine_cpa`, a private function | Code | 1 | 1 | 1 | **10** |
 
-| 12 | One test takes 167 s and sets the fast suite's wall time (`test_nulltest.py`) | Test | 3 | 2 | 2 | **20** |
-| 13 | pandas 4 deprecation warnings, via fastparquet and `Series.values` on tz-aware data | Dependency | 1 | 3 | 2 | **16** |
+| 12 | A `heavy` test's timing comment is 5× stale (`test_nulltest.py`: "~20 s", measured 102 s alone) | Test | 1 | 2 | 2 | **12** |
+| 13 | pandas 4 deprecation warnings, all raised inside fastparquet | Dependency | 1 | 3 | 2 | **16** |
 
 **Test-suite health (run during this audit, `-m "not slow" -n 4`):** 216 passed, 1 skipped, 174 s wall
 time. The skipped test is the geoid-grid test, which needs `data/proj`, and this checkout doesn't have it.
@@ -127,22 +127,18 @@ break a script that a report depends on for reproduction.
 name imported from `doppler`/`cli` exists, without running the scripts. A test of this kind found no stale
 names today.
 
-### 12. One test dominates the fast suite (20)
-`test_nulltest.py::test_unshifted_search_reproduces_the_ranking_and_shifts_fit_worse` takes 167 s. The next
-slowest are `test_score.py::test_rank_cells_is_bit_identical_to_the_frozen_oracle` (81 s) and the four
-`test_true_cell_ranks_first_after_locked_scoring` cases (33–60 s each). With 4 workers, the null test alone
-is most of the 174 s run, so local feedback is about 3 min whatever else changes. If a CI shard lands this
-test together with another slow one, it threatens the gate's 5-minute timeout.
-**Fix (½ day):** shrink the null test's scenario (fewer shifts, a smaller region) for the fast suite, and
-mark the full version `heavy`. Item 4's faster scoring also helps here.
+### 12. Stale timing on a heavy test (12; corrected after Phase 1 started)
+The first draft scored this 20 because the 174 s run above included `heavy` tests. The merge gate excludes
+them: it runs in 54 s locally with `-m "not slow and not heavy" -n 4`, so the gate is not at risk.
+`test_nulltest.py::test_unshifted_search_reproduces_the_ranking_and_shifts_fit_worse` is `heavy` and runs
+only after merge. Its comment said "~20 s", but it takes 102 s alone here. The comment is now corrected.
+Shrinking the scenario is optional; item 4 would speed it up anyway.
 
-### 13. pandas 4 deprecations (16)
-pandas 3.1 already warns that `future.infer_string` (read by fastparquet) and `Series.values` dropping the
-timezone will change in pandas 4. The second one is in our own code path (`test_export.py::test_parquet_roundtrip_zstd`).
-**Fix (about 1 h):** use `.dt.tz_convert(None).to_numpy()` where we call `.values` on tz-aware series, and
-turn warnings into errors in pytest (`filterwarnings = error::DeprecationWarning` plus the pandas warning
-class) so the next ones surface at once. fastparquet's warning goes away with the planned pyarrow switch
-(CLAUDE.md Conventions).
+### 13. pandas 4 deprecations (16; corrected)
+Both warnings (`future.infer_string` and `Series.values` dropping the timezone) are raised inside
+`fastparquet/writer.py`, called from `export.write_parquet`. None comes from our code, so there is nothing to
+change here. They go away with the pyarrow switch that CLAUDE.md already plans (Conventions), which is a
+dependency change and needs your OK. Otherwise, wait for a fastparquet release that supports pandas 4.
 
 ### 11. Private cross-module import (10)
 `score.cpa_geometry` imports `cascade._refine_cpa`. **Fix (10 min):** make it public, or move it to `geo.py`.
@@ -152,6 +148,18 @@ class) so the next ones surface at once. fastparquet's warning goes away with th
 **Phase 1: quick wins (about 1–2 days, before the next experiment run).** Items 1, 2, 5, 10 and 11, then 6,
 9, 12 and 13. None of them changes a result. Item 2 changes how config is read, so confirm that the `config_provenance`
 hash of a Stage A2 unit is unchanged.
+
+**Phase 1 status (branch `claude/engineering-plugin-skill-fe8010`).** It was scoped around the U19 task 4
+session running on the compute machine, which owns `config.yaml`, `fit.py`, `ridge.py`, `reports/u19.md`,
+`reports/apriori_registry.md` and `reports/experiments/u19/` (see CONTEXT.md).
+- Done: item 1 (transcript moved to `data/doppler.txt`; one report notes it), item 2 (`cli.need`, 25 call
+  sites, AST test; `config.yaml` unchanged, so `config_sha256` is unchanged), item 5 (CLAUDE.md layout only),
+  item 10 (`tests/test_experiments_import.py`), item 11 (`cascade.refine_cpa`), item 12 (comment).
+- Deferred until the U19 branch merges: item 2's two `plot.py` keys (`viewer.event_time_px` and
+  `event_freq_px` are not in `config.yaml`), and item 5's HANDOFF rewrite (that session will rewrite HANDOFF
+  at its end).
+- Waiting for your decision: item 6 (the lock should come from the compute machine's venv, which produced the
+  reference rows), item 9 (ruff is a new dependency), item 13 (the pyarrow switch).
 
 **Phase 2: with the next Phase 1 plan items (P1.x).** Item 4: profile, then batch the centre scoring. It makes
 every later ablation cheaper, so it pays for itself first. Item 3 goes alongside, one stage function per PR,
