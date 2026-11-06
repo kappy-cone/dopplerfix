@@ -426,7 +426,8 @@ def cmd_adsblol(args) -> int:
 
     Writes canonical track Parquet (``--out``) and, from the archive's database fields, a registry CSV
     (``<out stem>_types.csv``: icao24, typecode, registration) for aircraft_types. The archive is read in one
-    pass and never unpacked to disk (docs/adsblol_ingest.md).
+    pass and never unpacked to disk (docs/adsblol_ingest.md). A single ``-`` reads the whole tar from stdin, so
+    the parts need not be stored: ``(curl -sSfL <aa>; curl -sSfL <ab>) | python cli.py adsblol - ...``.
     """
     from doppler import adsblol, export
 
@@ -442,8 +443,9 @@ def cmd_adsblol(args) -> int:
     if t_hi <= t_lo:
         print("--end must be after --start", file=sys.stderr)
         return 2
+    src = sys.stdin.buffer if args.parts == ["-"] else args.parts
     frames, types = [], []
-    for df, row in adsblol.extract(export.iter_archive_json(args.parts), bbox, t_lo - p.pad_s, t_hi + p.pad_s, p):
+    for df, row in adsblol.extract(export.iter_archive_json(src), bbox, t_lo - p.pad_s, t_hi + p.pad_s, p):
         frames.append(df)
         if row:
             types.append(row)
@@ -1907,7 +1909,8 @@ def main(argv=None) -> int:
     t.set_defaults(func=cmd_tracks)
 
     j = sub.add_parser("adsblol", help="crop an adsb.lol daily archive (split tar parts) to a region and window")
-    j.add_argument("parts", nargs="+", help="the day's archive parts, e.g. v2026.11.04-planes-readsb-prod-0.tar.a*")
+    j.add_argument("parts", nargs="+", help="the day's archive parts, e.g. v2026.11.04-planes-readsb-prod-0.tar.a*, "
+                   "or - to read the whole tar from stdin")
     j.add_argument("--config", default="config.yaml")
     j.add_argument("--region", help="search region name (default region.name)")
     j.add_argument("--start", required=True, help="window start, ISO 8601 (naive = UTC)")

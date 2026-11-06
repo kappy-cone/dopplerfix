@@ -125,6 +125,25 @@ def test_iter_archive_json_streams_split_parts_gzipped_or_not(tmp_path):
     assert [o["icao"] for o in got] == [o["icao"] for o in objs]
 
 
+def test_iter_archive_json_reads_an_open_stream_without_closing_it(tmp_path):
+    objs = [_trace(f"a{k:05d}") for k in range(3)]
+    raw = b"".join(p.read_bytes() for p in _archive(tmp_path, objs))
+    f = io.BytesIO(raw)
+    assert [o["icao"] for o in export.iter_archive_json(f)] == [o["icao"] for o in objs]
+    assert not f.closed
+
+
+def test_cli_adsblol_reads_stdin(tmp_path, monkeypatch):
+    region = cli.load_region(cli.load_config("config.yaml"))[1]
+    c = region.centroid
+    raw = b"".join(p.read_bytes() for p in _archive(tmp_path, [_trace(lat=c.y, lon=c.x)], n_parts=2))
+    monkeypatch.setattr("sys.stdin", io.TextIOWrapper(io.BytesIO(raw)))
+    out = tmp_path / "stdin.parquet"
+    assert cli.main(["adsblol", "-", "--start", "2026-06-15T14:00:00", "--end", "2026-06-15T14:30:00",
+                     "--out", str(out)]) == 0
+    assert len(export.read_parquet(out)) == 20
+
+
 def test_cli_adsblol_writes_cropped_tracks_and_types(tmp_path):
     region = cli.load_region(cli.load_config("config.yaml"))[1]
     c = region.centroid

@@ -452,18 +452,30 @@ class _ChainedParts:
             self._f.close()
 
 
+class _Unclosed:
+    """A caller's stream, read through without closing it."""
+
+    def __init__(self, f):
+        self.read = f.read
+
+    def close(self) -> None:
+        pass
+
+
 def iter_archive_json(parts, name_filter: str = "trace") -> "Iterator[dict]":
     """Decoded JSON of every archive member whose name contains ``name_filter``, streamed in one pass.
 
-    Members may be gzipped whatever their extension (readsb writes gzip-compressed JSON), so the gzip magic
-    bytes decide. Unreadable members are skipped and counted in the module logger.
+    ``parts``: the split parts' paths (any order; they are read sorted), or an already open binary stream of the
+    whole tar (e.g. stdin fed by ``curl``), which is read but not closed. Members may be gzipped whatever their
+    extension (readsb writes gzip-compressed JSON), so the gzip magic bytes decide. Unreadable members are
+    skipped and counted in the module logger.
     """
     import gzip
     import logging
     import tarfile
 
     log = logging.getLogger(__name__)
-    src = _ChainedParts(sorted(parts))
+    src = _Unclosed(parts) if hasattr(parts, "read") else _ChainedParts(sorted(parts))
     bad = 0
     try:
         with tarfile.open(fileobj=src, mode="r|*") as tf:
