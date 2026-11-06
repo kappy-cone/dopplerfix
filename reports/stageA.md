@@ -309,3 +309,100 @@ paired with Stage A's V0/V1 rows for seeds 0–49. `--jobs 8`, 900 s cap, 0 erro
 
 Both are a-priori values or plan-specified forms, so changing them needs a new source (P3.1's covariance,
 4.5 data), not a re-tune against this result.
+
+## Stage A2 (session 8): the reference run under the post-U19 defaults
+
+**What it is.** The Stage A plan rerun with V0 and V1 under the current defaults (U19 arm b on:
+`detect.long_window_s` 3.0; the scenario builder's decoy detector pinned to pre-U19 detection), so that later
+arms on any config have a current baseline. It is a reference run, not a decision run: nothing is accepted
+and no config value changed.
+
+**Run.** `cli.py ablate --plan stageA --variants V0,V1 --jobs 8 --out outputs/ablation/stageA2` from clean main
+at df0282f (after #14 and #15), on the same compute machine as Stage A, U18 and U19. 275 units, 550 rows,
+about 53 min wall time (Stage A: about 69 min for the same pass). Rows: `reports/data/stageA2_rows.jsonl.gz`;
+detection counts per unit: `reports/data/stageA2_detection.json`. Tables: `reports/experiments/stageA2_compare.py`.
+- **Smoke run** (CONTRIBUTING §4.1, `--limit 3` into a scratch folder): V0 / V1 rows record arm b's detection
+  key (38c3875c43f1, the U19 V0b / V1b key); the 3 truth.json files equal Stage A's (the scenario pin works);
+  rows complete; commit df0282f, clean; the output folder did not exist. Outcomes not read.
+- **Cross-check** (also verifies #15 on this machine): on all-on C seeds 0–49, all 100 A2 V0 / V1 rows equal
+  the U19 V0b / V1b rows on every result field (`reports/experiments/stageA2_crosscheck.py`; provenance and wall
+  time excluded). No timeout status changed on those units.
+- **Caveat on timing:** for about 5 min early in the run the full test suite ran beside it (`-n 6`) on the
+  same machine. The one new timeout (V1 loo:geometry seed 18) may or may not come from that; timeouts are
+  compared below as recorded.
+
+**Paired against Stage A (pre-U19 detector), same units.** Rank-1 accuracy ignores status (right pair, within
+200 m); "gained / lost" are the discordant units (A2 only / A only), exact sign test. Recall = truth events
+detected.
+
+| configs | arm | units | correct A → A2 | rank-1 acc A → A2 | gained / lost (p) | recall A → A2 | confident-wrong A → A2 | timeouts A → A2 |
+|---|---|---|---|---|---|---|---|---|
+| all-on | V0 | 50 | 2 → 1 | 3 → 2 | 0 / 1 (1) | 75/100 → 82/100 | 9 → 9 | 0 → 0 |
+| all-on | V1 | 50 | 7 → 10 | 15 → 18 | 3 / 0 (0.25) | 75/100 → 82/100 | 7 → 5 | 2 → 0 |
+| clean | V0 | 5 | 4 → 4 | 5 → 5 | 0 / 0 (—) | 10/10 → 10/10 | 0 → 0 | 0 → 0 |
+| clean | V1 | 5 | 4 → 4 | 5 → 5 | 0 / 0 (—) | 10/10 → 10/10 | 0 → 0 | 0 → 0 |
+| every other config (pooled) | V0 | 220 | 5 → 9 | 14 → 19 | 6 / 1 (0.125) | 333/440 → 363/440 | 21 → 16 | 0 → 0 |
+| every other config (pooled) | V1 | 220 | 39 → 48 | 67 → 84 | 19 / 2 (0.000221) | 333/440 → 363/440 | 17 → 12 | 3 → 3 |
+| loo:adsb | V0 | 20 | 0 → 0 | 0 → 0 | 0 / 0 (—) | 28/40 → 32/40 | 1 → 2 | 0 → 0 |
+| loo:adsb | V1 | 20 | 3 → 5 | 6 → 9 | 3 / 0 (0.25) | 28/40 → 32/40 | 0 → 0 | 0 → 0 |
+| loo:levels | V0 | 20 | 0 → 1 | 1 → 2 | 1 / 0 (1) | 38/40 → 39/40 | 2 → 2 | 0 → 0 |
+| loo:levels | V1 | 20 | 4 → 7 | 6 → 9 | 3 / 0 (0.25) | 38/40 → 39/40 | 2 → 0 | 0 → 0 |
+| loo:source | V0 | 20 | 0 → 2 | 1 → 2 | 2 / 1 (1) | 32/40 → 38/40 | 0 → 0 | 0 → 0 |
+| loo:source | V1 | 20 | 4 → 6 | 6 → 10 | 4 / 0 (0.125) | 32/40 → 38/40 | 3 → 1 | 0 → 0 |
+| loo:path | V0 | 20 | 0 → 0 | 0 → 0 | 0 / 0 (—) | 18/40 → 26/40 | 1 → 1 | 0 → 0 |
+| loo:path | V1 | 20 | 1 → 1 | 3 → 3 | 0 / 0 (—) | 18/40 → 26/40 | 2 → 2 | 0 → 0 |
+| loo:scene | V0 | 20 | 0 → 1 | 1 → 2 | 1 / 0 (1) | 37/40 → 35/40 | 2 → 1 | 0 → 0 |
+| loo:scene | V1 | 20 | 3 → 4 | 6 → 7 | 1 / 0 (1) | 37/40 → 35/40 | 3 → 1 | 1 → 0 |
+| loo:geometry | V0 | 20 | 1 → 1 | 6 → 6 | 0 / 0 (—) | 29/40 → 28/40 | 2 → 2 | 0 → 0 |
+| loo:geometry | V1 | 20 | 1 → 1 | 7 → 8 | 1 / 0 (1) | 29/40 → 28/40 | 2 → 3 | 0 → 1 |
+| sub:rpm | V0 | 20 | 1 → 1 | 1 → 1 | 0 / 0 (—) | 29/40 → 30/40 | 5 → 2 | 0 → 0 |
+| sub:rpm | V1 | 20 | 5 → 5 | 7 → 7 | 1 / 1 (1) | 29/40 → 30/40 | 1 → 2 | 0 → 0 |
+| sub:cwind | V0 | 20 | 2 → 2 | 2 → 2 | 0 / 0 (—) | 28/40 → 31/40 | 2 → 2 | 0 → 0 |
+| sub:cwind | V1 | 20 | 6 → 6 | 7 → 7 | 0 / 0 (—) | 28/40 → 31/40 | 2 → 1 | 1 → 1 |
+| sub:mic_height | V0 | 20 | 0 → 0 | 0 → 1 | 1 / 0 (1) | 28/40 → 33/40 | 5 → 4 | 0 → 0 |
+| sub:mic_height | V1 | 20 | 5 → 7 | 7 → 9 | 2 / 0 (0.5) | 28/40 → 33/40 | 1 → 1 | 1 → 1 |
+| set:corridor_frac=1 | V0 | 10 | 0 → 0 | 0 → 0 | 0 / 0 (—) | 19/20 → 19/20 | 1 → 0 | 0 → 0 |
+| set:corridor_frac=1 | V1 | 10 | 3 → 2 | 4 → 4 | 0 / 0 (—) | 19/20 → 19/20 | 0 → 0 | 0 → 0 |
+| sub:corridor | V0 | 10 | 1 → 1 | 2 → 2 | 0 / 0 (—) | 18/20 → 18/20 | 0 → 0 | 0 → 0 |
+| sub:corridor | V1 | 10 | 1 → 2 | 4 → 5 | 1 / 0 (1) | 18/20 → 18/20 | 0 → 1 | 0 → 0 |
+| sub:twins | V0 | 10 | 0 → 0 | 0 → 0 | 0 / 0 (—) | 17/20 → 18/20 | 0 → 0 | 0 → 0 |
+| sub:twins | V1 | 10 | 2 → 1 | 3 → 2 | 0 / 1 (1) | 17/20 → 18/20 | 1 → 0 | 0 → 0 |
+| sub:reflection | V0 | 10 | 0 → 0 | 0 → 1 | 1 / 0 (1) | 12/20 → 16/20 | 0 → 0 | 0 → 0 |
+| sub:reflection | V1 | 10 | 1 → 1 | 1 → 4 | 3 / 0 (0.25) | 12/20 → 16/20 | 0 → 0 | 0 → 0 |
+
+### Failure taxonomy (rows with a failure class), A → A2
+| configs | arm | survival:grid | survival:cpa | survival:none | survival:offset | discrimination | bias | timeout |
+|---|---|---|---|---|---|---|---|---|
+| all-on | V0 | 10 → 7 | 1 → 3 | 5 → 1 | 15 → 19 | 8 → 9 | 8 → 9 | 0 → 0 |
+| all-on | V1 | 8 → 5 | 0 → 0 | 5 → 1 | 0 → 0 | 13 → 16 | 7 → 10 | 2 → 0 |
+| clean | V0 | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 0 |
+| clean | V1 | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 0 | 0 → 0 |
+| every other config (pooled) | V0 | 57 → 52 | 5 → 10 | 28 → 14 | 56 → 66 | 28 → 28 | 32 → 31 | 0 → 0 |
+| every other config (pooled) | V1 | 47 → 40 | 0 → 0 | 28 → 14 | 0 → 0 | 44 → 48 | 31 → 31 | 3 → 3 |
+
+### Timeouts, A2 (unit: Stage A outcome)
+- V1 all seed 11: A timeout → A2 abstained
+- V1 all seed 23: A timeout → A2 abstained
+- V1 loo:geometry seed 18: A abstained → A2 timeout
+- V1 loo:scene seed 6: A timeout → A2 abstained
+- V1 sub:cwind seed 11: A timeout → A2 timeout
+- V1 sub:mic_height seed 18: A timeout → A2 timeout
+
+**Reading (descriptive; per-config tests at n = 10–20 are not powered).**
+- Detection improves almost everywhere, as U19 found on all-on: pooled over the non-all-on configs recall
+  333 → 363 / 440 and survival:none halves (28 → 14) for both arms. The exceptions are loo:scene (37 → 35) and
+  loo:geometry (29 → 28).
+- V1 rank-1 accuracy: all-on 15 → 18 / 50 (3 / 0, the U19 V1b result on these seeds), every other config pooled
+  67 → 84 / 220 (19 gained / 2 lost, p = 0.0002). V0: pooled 14 → 19 (6 / 1). Confident-wrong falls for V1
+  (all-on 7 → 5, pooled 17 → 12).
+- The gain shows up most where detection was the limit: sub:reflection (V1 1 → 4), loo:source (6 → 10),
+  loo:adsb (6 → 9), loo:levels (6 → 9). loo:path recall rises 18 → 26 / 40 but its accuracy stays 3 / 20.
+- Failures move from survival to discrimination and bias (V1 all-on: survival:grid 8 → 5, survival:none 5 → 1,
+  discrimination 13 → 16, bias 7 → 10): runs that now keep both events reach scoring and fail there.
+  Discrimination is 16 / 32 classified V1 all-on failures (50 %), above the plan §3.0 40 % re-ordering line;
+  the rule was written for Stage A and applying it here is the user's call.
+- Timeouts: V1 3 → 3 overall (Stage A: 5 V1 timeouts including all-on 11 and 23, loo:scene 6, which now
+  finish; A2's new one is loo:geometry 18). Mean V1 run 63 s (Stage A 92 s), median 17 s, p90 133 s; V0 mean 9 s.
+
+This is the baseline for the U19 arm h1g screens (registered on branch s8-u19-handoff, not yet run), the
+two-stage refinement arm and the methodology review.
