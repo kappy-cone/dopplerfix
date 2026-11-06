@@ -64,6 +64,12 @@ def test_select_points_by_source_stale_and_anonymous():
     assert list(al.select_points(df, p)["source"]) == ["mlat"]               # stale and "other" dropped
     assert al.select_points(df, al.AdsbLolParams(keep_stale=True))["source"].tolist() == ["mlat", "adsb_icao"]
     assert al.select_points(df, al.AdsbLolParams(keep_anonymous=False)).empty
+    # MLAT keeps its position but not its geometric altitude, unless asked
+    mlat = al.select_points(df, p)
+    assert mlat["geometric_alt_m"].isna().all() and mlat["baro_alt_m"].notna().all()
+    assert df["geometric_alt_m"].iloc[0] == pytest.approx(5100 * 0.3048)        # the input is not modified
+    kept = al.select_points(df, al.AdsbLolParams(mlat_geometric_alt=True))
+    assert kept["geometric_alt_m"].iloc[0] == pytest.approx(5100 * 0.3048)
 
 
 def test_padded_bbox_and_crop():

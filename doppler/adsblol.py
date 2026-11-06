@@ -10,8 +10,8 @@ an array, in the order the readsb README documents (README-json.md, "trace jsons
     12 indicated airspeed | 13 roll
 
 Flags: 1 stale position, 2 start of a new leg, 4 vertical rate is geometric, 8 index-3 altitude is geometric.
-readsb's aircraft.json notes say geometric altitude is referenced to the WGS84 ellipsoid, which is what the
-pipeline expects. Check it on real data before relying on it, as for OpenSky.
+Geometric altitude is referenced to the WGS84 ellipsoid, which is what the pipeline expects: readsb's notes say
+so, and runway rollouts on one real day agree to about a metre (docs/adsblol_ingest.md §4.3).
 
 Pure functions only: the archive is read by ``export.iter_archive_json`` and written by ``cli.py adsblol``.
 """
@@ -41,6 +41,7 @@ class AdsbLolParams:
     keep_unknown_source: bool = True     # points with no source field (files before 2022)
     keep_anonymous: bool = True          # non-ICAO addresses ("~..."): no type, so class unknown
     keep_stale: bool = False             # points readsb marks stale (no position for 20 s before)
+    mlat_geometric_alt: bool = False     # keep index-10 geometric altitude on MLAT points (often held over)
     margin_m: float = 30000.0            # crop margin around the region (≥ the audibility slant distances)
     pad_s: float = 300.0                 # crop margin around the time window
 
@@ -97,13 +98,24 @@ def parse_trace(obj: dict) -> pd.DataFrame:
 
 
 def select_points(df: pd.DataFrame, p: AdsbLolParams) -> pd.DataFrame:
-    """Keep the accepted position sources (and, unless asked, drop stale and anonymous points)."""
+    """Keep the accepted position sources (and, unless asked, drop stale and anonymous points).
+
+    MLAT points lose their geometric altitude unless ``mlat_geometric_alt``: MLAT solves position only, and on
+    a real day (docs/adsblol_ingest.md §4) the field was mostly missing and, when present, often frozen while
+    the barometric altitude moved.
+    """
     ok = df["source"].isin(p.sources) | ((df["source"] == "") & p.keep_unknown_source)
     if not p.keep_stale:
         ok &= ~df["stale"]
     if not p.keep_anonymous:
         ok &= ~df["icao24"].str.startswith("~")
-    return df[ok]
+    out = df[ok]
+    if not p.mlat_geometric_alt:
+        mlat = out["source"] == "mlat"
+        if mlat.any():
+            out = out.copy()
+            out.loc[mlat, "geometric_alt_m"] = np.nan
+    return out
 
 
 def crop(df: pd.DataFrame, bbox: tuple[float, float, float, float], t_lo_s: float, t_hi_s: float) -> pd.DataFrame:
