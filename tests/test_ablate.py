@@ -97,3 +97,52 @@ def test_paired_tests_pair_by_seed():
     assert t["rank1_error_m"]["n"] == 6 and t["rank1_error_m"]["median_diff"] == -800.0
     assert t["rank1_accuracy_sign"]["a_only"] == 6
     assert out["V1: loo:adsb vs all"]["tests"]["rank1_error_m"]["n_nonzero"] == 0
+
+
+def test_detection_key_follows_detection_sections_only():
+    base = cli.detection_key(CFG)
+    for v in ("V0", "V1", "V0c", "V1c"):                      # cascade / scoring overlays: same detection
+        assert cli.detection_key(cli.apply_variant(CFG, v)) == base
+        assert cli.events_file_name(cli.apply_variant(CFG, v), CFG) == "events.parquet"
+    for v in ("V0b", "V1b"):                                   # detect.long_window_s: own detection
+        assert cli.detection_key(cli.apply_variant(CFG, v)) != base
+    assert cli.detection_key(cli.apply_variant(CFG, "V0b")) == cli.detection_key(cli.apply_variant(CFG, "V1b"))
+    assert cli.events_file_name(cli.apply_variant(CFG, "V1b"), CFG).startswith("events_")
+
+
+def test_variant_fits_detects_under_each_variants_own_config(tmp_path, monkeypatch):
+    """Regression: the ablation driver once detected with the base config only and shared those fits with every
+    variant, so a detect: overlay (V1b / V0b) never reached detection."""
+    seen = []
+
+    def fake_run_events(x, fs, cfg, c):
+        seen.append((cfg.get("detect") or {}).get("long_window_s"))
+        return None, []
+
+    monkeypatch.setattr(cli, "run_events", fake_run_events)
+    cache = {}
+    for v in ("V1", "V0", "V1b", "V0b"):
+        cli.variant_fits(cache, cli.apply_variant(CFG, v), CFG, [0.0], 8000, tmp_path)
+    base_lw = (CFG.get("detect") or {}).get("long_window_s")
+    assert seen == [base_lw, 3.0]                              # once for V1 / V0, once for V1b / V0b
+    assert all((tmp_path / name).exists() for name in cache)
+    assert "events.parquet" in cache and len(cache) == 2
+
+
+def test_summary_reads_each_variants_own_events_file(tmp_path):
+    import pandas as pd
+
+    from doppler import evaluate as ev
+    from doppler import export
+
+    keep = tmp_path / "keep" / cli._unit_tag("C", "all", 3)
+    keep.mkdir(parents=True)
+    (keep / "truth.json").write_text(json.dumps({"events": [{"t_cpa_received_rel_s": 15.0},
+                                                            {"t_cpa_received_rel_s": 45.0}]}))
+    export.write_parquet(pd.DataFrame({"t_cpa_received_rel_s": [14.8]}), keep / "events.parquet")
+    export.write_parquet(pd.DataFrame({"t_cpa_received_rel_s": [14.8, 45.3]}),
+                         keep / cli.events_file_name(cli.apply_variant(CFG, "V1b"), CFG))
+    rows = [{"scenario": "C", "config": "all", "seed": 3, "variant": "V1"},     # e.g. timeout rows: no counts
+            {"scenario": "C", "config": "all", "seed": 3, "variant": "V1b"}]
+    assert cli._fill_detection(rows, tmp_path, ev.EvalParams(), CFG) == (2, 0)
+    assert rows[0]["truth_events_detected"] == 1 and rows[1]["truth_events_detected"] == 2

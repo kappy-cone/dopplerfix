@@ -1,4 +1,4 @@
-"""Command line: synth | events | tracks | locate | verify-result.
+"""Command line: synth | events | tracks | adsblol | locate | verify-result.
 
     python cli.py synth  --config config.yaml --out outputs/synth_seed0 [--seed 0] [--event-times 150,420]
     python cli.py events --config config.yaml --audio outputs/synth_seed0/audio.wav [--out events.json]
@@ -83,6 +83,26 @@ def run_events(x, fs, cfg: dict, c: float):
     fits = fit.characterize_audio(x, fs, det, p["spec"], p["ridge"], p["ridge_jet"], p["fit"], p["classify"], c,
                                   jet_spec_params=p["spec_jet"])
     return det, fits
+
+
+# Config sections that run_events reads (event_params + the speed of sound). Two configs with equal values here
+# give the same fitted events from the same audio.
+DETECTION_SECTIONS = ("spectrogram", "spectrogram_jet", "detect", "ridge", "ridge_jet", "fit", "classify", "environment")
+
+
+def detection_key(cfg: dict) -> str:
+    """SHA-256 of the config sections detection depends on (DETECTION_SECTIONS)."""
+    import hashlib
+
+    blob = json.dumps({k: cfg.get(k) for k in DETECTION_SECTIONS}, sort_keys=True, default=str)
+    return hashlib.sha256(blob.encode()).hexdigest()
+
+
+def events_file_name(variant_cfg: dict, base_cfg: dict) -> str:
+    """Kept events file of an ablation unit for a variant: events.parquet when the variant detects like the base
+    config, else events_<key>.parquet (its own detection)."""
+    k = detection_key(variant_cfg)
+    return "events.parquet" if k == detection_key(base_cfg) else f"events_{k[:12]}.parquet"
 
 
 def print_fits(fits) -> None:
@@ -418,6 +438,46 @@ def cmd_tracks(args) -> int:
     span = (min(t.t_s[0] for t in prepared), max(t.t_s[-1] for t in prepared)) if prepared else (np.nan, np.nan)
     print(f"{n_air} aircraft, {len(prepared)} gap-free segments, classes {cls}, altitude source {alt}")
     print(f"time span {pd.Timestamp(span[0], unit='s', tz='UTC')} .. {pd.Timestamp(span[1], unit='s', tz='UTC')}")
+    return 0
+
+
+def cmd_adsblol(args) -> int:
+    """Stream an adsb.lol daily archive (its split tar parts) and keep only the region and time window.
+
+    Writes canonical track Parquet (``--out``) and, from the archive's database fields, a registry CSV
+    (``<out stem>_types.csv``: icao24, typecode, registration) for aircraft_types. The archive is read in one
+    pass and never unpacked to disk (docs/adsblol_ingest.md). A single ``-`` reads the whole tar from stdin, so
+    the parts need not be stored: ``(curl -sSfL <aa>; curl -sSfL <ab>) | python cli.py adsblol - ...``.
+    """
+    from doppler import adsblol, export
+
+    cfg = load_config(args.config)
+    p = adsblol.AdsbLolParams.from_dict(section(cfg, "adsblol"))
+    _, region = load_region(cfg, args.region)
+    lon_lo, lat_lo, lon_hi, lat_hi = region.bounds
+    bbox = adsblol.padded_bbox(lat_lo, lat_hi, lon_lo, lon_hi, p.margin_m)
+    t_lo = pd.Timestamp(args.start).tz_localize("UTC").timestamp() if pd.Timestamp(args.start).tz is None \
+        else pd.Timestamp(args.start).timestamp()
+    t_hi = pd.Timestamp(args.end).tz_localize("UTC").timestamp() if pd.Timestamp(args.end).tz is None \
+        else pd.Timestamp(args.end).timestamp()
+    if t_hi <= t_lo:
+        print("--end must be after --start", file=sys.stderr)
+        return 2
+    src = sys.stdin.buffer if args.parts == ["-"] else args.parts
+    frames, types = [], []
+    for df, row in adsblol.extract(export.iter_archive_json(src), bbox, t_lo - p.pad_s, t_hi + p.pad_s, p):
+        frames.append(df)
+        if row:
+            types.append(row)
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tracks_df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=adsblol.COLUMNS)
+    export.write_parquet(tracks_df[adsblol.COLUMNS], out)
+    pd.DataFrame(types, columns=["icao24", "typecode", "registration"]).drop_duplicates("icao24").to_csv(
+        out.with_name(out.stem + "_types.csv"), index=False)
+    n_air = tracks_df["icao24"].nunique()
+    print(f"{len(tracks_df)} fixes from {n_air} aircraft ({len(types)} with a type code) in "
+          f"{bbox[0]:.3f}..{bbox[1]:.3f} N, {bbox[2]:.3f}..{bbox[3]:.3f} E -> {out}")
     return 0
 
 
@@ -1409,6 +1469,7 @@ def ablate_row(unit: dict, variant: str, res, seconds: float) -> dict:
     return {
         "scenario": unit["scenario"], "config": unit["config"], "seed": unit["seed"], "variant": variant,
         "git": unit["git"], "config_sha256": config_provenance(res.cfg, unit["config_path"])["sha256"],
+        "detection_sha256": detection_key(res.cfg),
         "outcome": te.get("outcome"), "status": res.status, "failure": te.get("failure"),
         "rank1_error_m": te.get("rank1_error_m"), "rank1_error_en_m": te.get("rank1_error_en_m"),
         "rank1_assignment_correct": te.get("rank1_assignment_correct"),
@@ -1487,8 +1548,21 @@ def shutil_rmtree(p: Path) -> None:
     shutil.rmtree(p, ignore_errors=True)
 
 
+def variant_fits(cache: dict, vcfg: dict, base_cfg: dict, x, fs: float, keep: Path) -> list:
+    """Fitted events under the variant's own detection config, run once per distinct detection config of a unit
+    (``cache``: events file name -> fits) and kept as keep/<events_file_name>."""
+    from doppler import export
+
+    name = events_file_name(vcfg, base_cfg)
+    if name not in cache:
+        _, cache[name] = run_events(x, fs, vcfg, speed_of_sound_from(vcfg))
+        export.write_events(cache[name], keep / name, None)
+    return cache[name]
+
+
 def _ablate_worker(unit: dict, q) -> None:
-    """Process one (scenario, config, seed): synthesise once, detect once, run every variant in-process."""
+    """Process one (scenario, config, seed): synthesise once, detect once per distinct detection config
+    (variant_fits), run every variant in-process."""
     import time as _time
     import traceback
 
@@ -1511,10 +1585,10 @@ def _ablate_worker(unit: dict, q) -> None:
         keep = Path(unit["keep_dir"])
         keep.mkdir(parents=True, exist_ok=True)
         (keep / "truth.json").write_bytes((sc_dir / "truth.json").read_bytes())
-        c = speed_of_sound_from(cfg)
         x, fs = sf.read(sc_dir / "audio.flac", always_2d=False)   # exactly what the CLI would analyse
-        _, fits = run_events(audio.mix_to_mono(x), fs, cfg, c)
-        export.write_events(fits, keep / "events.parquet", None)
+        xm = audio.mix_to_mono(x)
+        fits_by_file: dict[str, list] = {}
+        variant_fits(fits_by_file, cfg, cfg, xm, fs, keep)       # events.parquet: the base detection, always kept
         inp = LocateInputs(str(sc_dir / "audio.flac"), str(sc_dir / "tracks.parquet"),
                            str(sc_dir / "aircraft_db.csv"), str(sc_dir / "truth.json"), write_grid=False)
         for variant in unit["variants"]:
@@ -1523,10 +1597,11 @@ def _ablate_worker(unit: dict, q) -> None:
                 q.put(_asdesigned_row(unit, variant, sc_dir, Path(unit["tmp_dir"])))
                 continue
             vcfg = apply_variant(cfg, variant)
-            res = run_locate(vcfg, inp, fits=fits, audio_data=(audio.mix_to_mono(x), fs))
+            res = run_locate(vcfg, inp, fits=variant_fits(fits_by_file, vcfg, cfg, xm, fs, keep), audio_data=(xm, fs))
             if res is None:
                 q.put({"scenario": unit["scenario"], "config": unit["config"], "seed": unit["seed"],
-                       "variant": variant, "git": unit["git"], "outcome": "abstained", "status": "none",
+                       "variant": variant, "git": unit["git"], "detection_sha256": detection_key(vcfg),
+                       "outcome": "abstained", "status": "none",
                        "failure": "survival:none", "n_candidates": 0, "n_events": 0,
                        "seconds": _time.perf_counter() - t0})
                 continue
@@ -1683,27 +1758,34 @@ def _json_safe(o):
     return str(o)
 
 
-def _fill_detection(rows: list[dict], out: Path, ep) -> tuple[int, int]:
+def _fill_detection(rows: list[dict], out: Path, ep, cfg: dict | None = None) -> tuple[int, int]:
     """Recompute each row's detection counts from its kept truth.json + events.parquet (plan §8.1).
 
     Rows that already record ``truth_events_detected`` keep their value (a disagreement is counted); rows
     without it (no events, timeouts, the as-designed arms, whose detection code and config are identical to
     the current ones at tag variants-asdesigned) get the recomputed counts. Returns (filled, mismatched).
+    With ``cfg``, a variant whose overlay changes detection is read from its own kept events file
+    (events_file_name); without it, or for a variant not in cfg, every row reads events.parquet.
     """
     from doppler import evaluate as ev_
     from doppler import export
 
-    cache: dict[str, tuple[int, int] | None] = {}
+    cache: dict[tuple[str, str], tuple[int, int] | None] = {}
+    names: dict[str, str] = {}
     filled = mismatched = 0
     for r in rows:
-        tag = _unit_tag(r["scenario"], r["config"], r["seed"])
+        v = r.get("variant", "")
+        if v not in names:
+            names[v] = (events_file_name(apply_variant(cfg, v), cfg)
+                        if cfg is not None and v in (cfg.get("variants") or {}) else "events.parquet")
+        tag = (_unit_tag(r["scenario"], r["config"], r["seed"]), names[v])
         if tag not in cache:
-            keep = out / "keep" / tag
-            if not (keep / "truth.json").exists() or not (keep / "events.parquet").exists():
+            keep = out / "keep" / tag[0]
+            if not (keep / "truth.json").exists() or not (keep / tag[1]).exists():
                 cache[tag] = None
             else:
                 truth = json.loads((keep / "truth.json").read_text())
-                ev = export.read_parquet(keep / "events.parquet", columns=["t_cpa_received_rel_s"])
+                ev = export.read_parquet(keep / tag[1], columns=["t_cpa_received_rel_s"])
                 t_det = ev["t_cpa_received_rel_s"].to_numpy() if "t_cpa_received_rel_s" in ev else []  # none detected
                 m = ev_.match_events(t_det,
                                      [te["t_cpa_received_rel_s"] for te in truth["events"]], ep.match_tol_s)
@@ -1751,8 +1833,9 @@ def ablate_summary(out: Path, config_path: str) -> int:
     from doppler import evaluate as ev_
 
     rows = [json.loads(line) for line in (out / "rows.jsonl").read_text().splitlines()]
-    ep = ev_.EvalParams.from_dict(section(load_config(config_path), "evaluate"))
-    n_filled, n_mismatch = _fill_detection(rows, out, ep)
+    cfg_ = load_config(config_path)
+    ep = ev_.EvalParams.from_dict(section(cfg_, "evaluate"))
+    n_filled, n_mismatch = _fill_detection(rows, out, ep, cfg_)
     groups: dict[tuple, list] = {}
     for r in rows:
         groups.setdefault((r["scenario"], r["config"], r["variant"]), []).append(r)
@@ -1869,6 +1952,16 @@ def main(argv=None) -> int:
     t.add_argument("--tracks", required=True)
     t.add_argument("--registry", help="aircraft registry CSV (default: aircraft_types.registry_path)")
     t.set_defaults(func=cmd_tracks)
+
+    j = sub.add_parser("adsblol", help="crop an adsb.lol daily archive (split tar parts) to a region and window")
+    j.add_argument("parts", nargs="+", help="the day's archive parts, e.g. v2026.11.04-planes-readsb-prod-0.tar.a*, "
+                   "or - to read the whole tar from stdin")
+    j.add_argument("--config", default="config.yaml")
+    j.add_argument("--region", help="search region name (default region.name)")
+    j.add_argument("--start", required=True, help="window start, ISO 8601 (naive = UTC)")
+    j.add_argument("--end", required=True, help="window end, ISO 8601 (naive = UTC)")
+    j.add_argument("--out", required=True, help="track Parquet to write (data/ is gitignored)")
+    j.set_defaults(func=cmd_adsblol)
 
     g = sub.add_parser("regions", help="list or add search regions (inputs/search_regions.gpkg)")
     g.add_argument("action", choices=["list", "add"])

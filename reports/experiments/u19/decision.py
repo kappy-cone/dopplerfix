@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(ROOT))
 
-from cli import load_config, section  # noqa: E402
+from cli import apply_variant, detection_key, load_config, section  # noqa: E402
 from doppler import evaluate as ev  # noqa: E402
 
 REF_FILES = ("reports/data/stageA_rows.jsonl.gz", "reports/data/u18_rows.jsonl.gz")
@@ -82,6 +82,19 @@ def same_detection(a: dict | None, b: dict | None) -> bool:
 RESULT_FIELDS = ("outcome", "status", "rank1_error_m", "rank1_assignment_correct", "true_assignment_group_rank")
 
 
+def arm_applied(by, cfg: dict) -> dict:
+    """V0 (added in session 8, after the first decision run turned out not to apply the arm): every non-timeout
+    V0b / V1b row records the detection config it ran with (``detection_sha256``), that config is the arm's own,
+    and it differs from the reference's. Rows from before the fix record nothing and fail."""
+    want = detection_key(apply_variant(cfg, "V1b"))
+    rows = [r for (v, s), r in by.items() if v in ("V0b", "V1b") and r.get("outcome") != "timeout"]
+    unrecorded = sum(r.get("detection_sha256") is None for r in rows)
+    wrong = sum(r.get("detection_sha256") not in (None, want) for r in rows)
+    ok = (bool(rows) and unrecorded == 0 and wrong == 0 and want == detection_key(apply_variant(cfg, "V0b"))
+          and want != detection_key(apply_variant(cfg, "V1")))
+    return {"ok": ok, "rows": len(rows), "unrecorded": unrecorded, "wrong": wrong}
+
+
 def validity(by):
     """V1: the arm's strict and robust rows agree on detection. V2: runs whose fitted events equal the
     reference's reproduce the reference result fields exactly, timeouts aside (the V0/V1 code paths unchanged)."""
@@ -134,7 +147,8 @@ def main(argv=None) -> int:
     ap.add_argument("--no-snr", action="store_true", help="skip the recall-against-SNR table (no scenario rebuild)")
     ap.add_argument("--jobs", type=int, default=8, help="processes for the scenario rebuild")
     a = ap.parse_args(argv)
-    ep = ev.EvalParams.from_dict(section(load_config(str(ROOT / "config.yaml")), "evaluate"))
+    cfg = load_config(str(ROOT / "config.yaml"))
+    ep = ev.EvalParams.from_dict(section(cfg, "evaluate"))
     by, det = load_rows(a.rows)
     missing = [(v, s) for v in ("V0", "V1", "V0b", "V1b") for s in SEEDS if (v, s) not in by]
     print(f"rows: {len(by)}; missing {len(missing)} {missing[:6]}")
@@ -144,6 +158,12 @@ def main(argv=None) -> int:
     print(f"arm rows recorded commit(s): {commits}")
 
     print("\n## Validity (checked before any criterion is read)")
+    app = arm_applied(by, cfg)
+    print(f"- V0 arm applied: {'yes' if app['ok'] else 'NO'} ({app['rows']} non-timeout arm rows, "
+          f"{app['unrecorded']} without a detection record, {app['wrong']} with another detection config)")
+    if not app["ok"]:
+        print("\n**INVALID RUN: the arm's detection config is not shown to have been applied. Criteria not read.**")
+        return 2
     val = validity(by)
     print(f"- V1 detection, V0b vs V1b rows disagree on seeds: {val['detection_disagree'] or 'none'}")
     print(f"- V2 runs with the reference's fitted events: {val['identical_runs']}; result fields differ (timeouts "
