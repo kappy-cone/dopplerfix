@@ -150,6 +150,9 @@ def modeled_ratio(mic_xyz: NDArray, track: int, ts: TrackSet, t_rx_s: NDArray, c
                   n_iter: int = 4) -> tuple[NDArray, NDArray, NDArray, NDArray]:
     """Observed/source frequency ratio at absolute received times for one track and mic (ECEF).
 
+    ``mic_xyz`` is one position (3,), or one per row (M, 3) with ``t_rx_s`` (M, n): refinement evaluates several
+    nearby positions in one call. Each row's arithmetic is the same as a single-position call.
+
     Solves t_e + |A(t_e) − P|/c = t_r by Newton iteration (|dr/dt|/c < 1, so it
     converges fast), then ratio = c / (c + dr/dt_e). Returns
     ``(ratio, t_emit, range_m, valid)``; ``valid`` is False where the converged
@@ -162,7 +165,8 @@ def modeled_ratio(mic_xyz: NDArray, track: int, ts: TrackSet, t_rx_s: NDArray, c
     # Hot path (≈ 75 % of V1 run time, profiled in session 5): one scalar track index, clamping with
     # maximum/minimum and the norm as sqrt(Σ x²), each bit-identical to np.clip / np.linalg.norm here but
     # without their per-call overhead on these small arrays.
-    P = np.asarray(mic_xyz, float).reshape(1, 3)
+    P = np.asarray(mic_xyz, float)
+    P = P.reshape(1, 3) if P.ndim == 1 else P.reshape(-1, 1, 3)
     tr = np.asarray(t_rx_s, float)
     k = int(track)
     lo, hi = ts.coverage(track)
@@ -268,6 +272,9 @@ def _hyp_cost(dts: NDArray, ridges: list[RidgeObs], tracks: tuple[int, ...], xyz
               start_s: float, c: float, k: float, p: ScoreParams | None = None):
     """Pooled cost for each Δt in ``dts`` (G,), every event sharing that Δt. Returns per-event arrays (N, G).
 
+    ``xyz`` is the mic position (3,), or one position per Δt (G, 3), so a batch of (position, Δt) points costs one
+    call (``refine_in_cell``); column g is then bit-identical to a single-position call at (xyz[g], dts[g]).
+
     An event with track −1 (unmatched) contributes nothing here under the Huber loss; hypotheses are ranked
     lexicographically by (number of unmatched events, cost), see CellScore.rank_key. With the calibrated
     likelihood (``p.likelihood == "calibrated"``) costs are nats and an unmatched event costs its points as
@@ -355,6 +362,29 @@ def _cell_basis(xyz: NDArray) -> NDArray:
     return enu_basis(lat, lon)          # rows: east, north, up (ECEF)
 
 
+def _fd_points(z: NDArray, eps: float, lb: NDArray, ub: NDArray) -> list[NDArray]:
+    """The forward-difference points scipy's L-BFGS-B evaluates for its gradient at ``z`` (``options.eps``).
+
+    A prediction, so the cost at these points can be computed in the same call as the cost at ``z``. It mirrors
+    ``scipy.optimize._numdiff.approx_derivative`` ('2-point', ``abs_step``, bounds). A wrong prediction costs only
+    speed: scipy still asks for its own points, and any not computed here are computed when it asks.
+    """
+    try:
+        from scipy.optimize._numdiff import _adjust_scheme_to_bounds
+    except ImportError:                                   # a scipy without the helper: no prediction
+        return []
+    h = np.full(z.shape, float(eps))
+    if np.any(((z + h) - z) == 0):                        # scipy falls back to a relative step there
+        return []
+    h, _ = _adjust_scheme_to_bounds(z, h, 1, "1-sided", lb, ub)
+    pts = []
+    for i in range(z.size):
+        x1 = np.copy(z)
+        x1[i] = z[i] + h[i]
+        pts.append(x1)
+    return pts
+
+
 def refine_in_cell(hyp: Hypothesis, ridges: list[RidgeObs], ts: TrackSet, xyz: NDArray, half_m: float,
                    start_time_s: float, c: float, p: ScoreParams, init: CellScore,
                    dt_prior: tuple[float, float] | None = None) -> tuple[CellScore, NDArray, NDArray]:
@@ -363,6 +393,12 @@ def refine_in_cell(hyp: Hypothesis, ridges: list[RidgeObs], ts: TrackSet, xyz: N
     Joint bounded optimisation of (east, north, Δt) — Δt still shared by every event, f0 profiled per event —
     started from the best of a 3×3 sub-grid. Returns (CellScore at the optimum, (east, north) offset in m,
     refined ECEF position).
+
+    Cost evaluations are batched without changing any result: the 3×3 × 13 start grid is one call, and each
+    point L-BFGS-B visits is costed together with the three finite-difference points its gradient needs next
+    (``_fd_points``), which scipy then collects through its ``workers`` hook. The sequence of points, and so
+    every result, is the same as evaluating them one at a time (tests/test_score.py checks this against a
+    frozen copy of the one-at-a-time version).
     """
     from scipy.optimize import minimize
 
@@ -376,24 +412,44 @@ def refine_in_cell(hyp: Hypothesis, ridges: list[RidgeObs], ts: TrackSet, xyz: N
     def pos(u):
         return xyz + u[0] * B[0] + u[1] * B[1]
 
-    def total_cost(u, dts):
-        return _hyp_cost(np.atleast_1d(dts), ridges, hyp.assignment, pos(u), ts, start_time_s, c, p.huber_k,
+    def costs(us, dts) -> NDArray:
+        """Total cost at each (u, Δt) pair, one call."""
+        xyzs = np.stack([pos(u) for u in us])
+        return _hyp_cost(np.asarray(dts, float), ridges, hyp.assignment, xyzs, ts, start_time_s, c, p.huber_k,
                          p)[0].sum(0)
 
-    starts = []
     dgrid = np.linspace(lo, hi, 13)
-    for a in (-2 / 3, 0.0, 2 / 3):
-        for b in (-2 / 3, 0.0, 2 / 3):
-            u = np.array([a * half_m, b * half_m])
-            cst = total_cost(u, dgrid)
-            j = int(np.argmin(cst))
-            starts.append((float(cst[j]), u, float(dgrid[j])))
+    grid_u = [np.array([a * half_m, b * half_m]) for a in (-2 / 3, 0.0, 2 / 3) for b in (-2 / 3, 0.0, 2 / 3)]
+    grid_cost = costs([u for u in grid_u for _ in dgrid], np.tile(dgrid, len(grid_u))).reshape(len(grid_u), -1)
+    starts = []
+    for u, cst in zip(grid_u, grid_cost):
+        j = int(np.argmin(cst))
+        starts.append((float(cst[j]), u, float(dgrid[j])))
     _, u0, d0 = min(starts, key=lambda z: z[0])
     scale = np.array([100.0, 100.0, 1.0])               # condition: 100 m ~ 1 s
     x0 = np.array([u0[0], u0[1], d0]) / scale
     bnds = [(-half_m / 100, half_m / 100), (-half_m / 100, half_m / 100), (lo, hi)]
-    res = minimize(lambda z: float(total_cost(z[:2] * 100.0, z[2])[0]), x0, method="L-BFGS-B", bounds=bnds,
-                   options={"eps": 1e-3, "maxiter": 60})
+    eps = 1e-3
+    lb, ub = np.array([b[0] for b in bnds]), np.array([b[1] for b in bnds])
+    known: dict[bytes, float] = {}                      # cost at finite-difference points computed ahead
+
+    def fun(zz):
+        zz = np.asarray(zz, float)
+        pts = [zz] + _fd_points(zz, eps, lb, ub)
+        v = costs([x[:2] * 100.0 for x in pts], [x[2] for x in pts])
+        for x, t in zip(pts[1:], v[1:]):
+            known[x.tobytes()] = float(t)
+        return float(v[0])
+
+    def workers(_f, xs):
+        xs = list(xs)
+        todo = [x for x in xs if x.tobytes() not in known]
+        if todo:
+            for x, t in zip(todo, costs([x[:2] * 100.0 for x in todo], [x[2] for x in todo])):
+                known[x.tobytes()] = float(t)
+        return [np.atleast_1d(known[x.tobytes()]) for x in xs]
+
+    res = minimize(fun, x0, method="L-BFGS-B", bounds=bnds, options={"eps": eps, "maxiter": 60, "workers": workers})
     z = res.x * scale if res.fun <= min(starts, key=lambda q: q[0])[0] else np.r_[u0, d0]
     u, dt = z[:2], float(z[2])
     cst, f0, rms, miss = _hyp_cost(np.array([dt]), ridges, hyp.assignment, pos(u), ts, start_time_s, c, p.huber_k,

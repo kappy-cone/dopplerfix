@@ -430,19 +430,32 @@ class TrackSet:
         v[~ok] = np.nan
         return p, v
 
+    def _packed(self, k: int) -> NDArray:
+        """Row ``k`` as (T-1, 12) [x_i, x_i+1, v_i, v_i+1], so interpolation needs one gather (built on first use).
+
+        Derived from ``xyz`` / ``vel``, which must not change afterwards.
+        """
+        cache = self.meta.setdefault("_packed", {})
+        if k not in cache:
+            X, V = self.xyz[k], self.vel[k]
+            cache[k] = np.ascontiguousarray(np.concatenate([X[:-1], X[1:], V[:-1], V[1:]], axis=1))
+        return cache[k]
+
     def _sample_one(self, k: int, t: NDArray) -> tuple[NDArray, NDArray]:
-        """``sample`` for one track: identical interpolation, indexing row ``k`` once."""
+        """``sample`` for one track: identical interpolation and arithmetic, one gather from ``_packed``."""
         u = (t - self.t0_s) / self.dt_s
         i0 = np.floor(u).astype(np.int64)
         T = self.xyz.shape[1]
         ok = (i0 >= 0) & (i0 + 1 < T)
         i0c = np.minimum(np.maximum(i0, 0), T - 2)
         w = (u - i0c)[..., None]
-        X, V = self.xyz[k], self.vel[k]
-        p = (1 - w) * X[i0c] + w * X[i0c + 1]
-        v = (1 - w) * V[i0c] + w * V[i0c + 1]
-        p[~ok] = np.nan
-        v[~ok] = np.nan
+        g = self._packed(k)[i0c]                     # (..., 12)
+        w1 = 1 - w
+        p = w1 * g[..., 0:3] + w * g[..., 3:6]
+        v = w1 * g[..., 6:9] + w * g[..., 9:12]
+        if not ok.all():
+            p[~ok] = np.nan
+            v[~ok] = np.nan
         return p, v
 
 

@@ -289,3 +289,116 @@ def test_correlated_ridge_noise_scale_within_20_percent():
     d = [x for x, interior in (_wilks_trial(s, 0.6) for s in range(100)) if interior]
     assert len(d) >= 75
     assert np.mean(d) == pytest.approx(3.0, rel=0.2)
+
+
+# --- Batched refinement and packed track sampling: bit-identical to the frozen one-at-a-time versions ---------
+
+def _equal(a, b) -> bool:
+    return np.array_equal(np.asarray(a), np.asarray(b), equal_nan=True)
+
+
+def test_track_sampling_matches_the_frozen_oracle():
+    from . import _scoring_oracle as oracle
+
+    ts, _, _ = _two_track_setup()
+    rng = np.random.default_rng(3)
+    t_lo, t_hi = ts.t0_s - 5.0, ts.t0_s + ts.dt_s * ts.xyz.shape[1] + 5.0     # both ends outside coverage
+    for k in range(ts.n_tracks):
+        for shape in [(7,), (4, 33)]:
+            t = rng.uniform(t_lo, t_hi, shape)
+            new, old = ts._sample_one(k, t), oracle.sample_one(ts, k, t)
+            assert _equal(new[0], old[0]) and _equal(new[1], old[1])
+        inside = rng.uniform(ts.t0_s + 1.0, ts.t0_s + 300.0, (3, 20))       # all valid: the no-NaN-write branch
+        new, old = ts._sample_one(k, inside), oracle.sample_one(ts, k, inside)
+        assert _equal(new[0], old[0]) and _equal(new[1], old[1]) and np.isfinite(new[0]).all()
+
+
+def test_modeled_ratio_rows_match_single_position_calls():
+    ts, mic, _ = _two_track_setup()
+    mics = mic + np.array([[0.0, 0.0, 0.0], [37.5, -12.0, 0.4], [-80.0, 55.0, -1.0]])
+    t = START + np.linspace(60.0, 180.0, 3 * 41).reshape(3, 41)
+    rows = score.modeled_ratio(mics, 0, ts, t, 343.0)
+    for i in range(3):
+        one = score.modeled_ratio(mics[i], 0, ts, t[i:i + 1], 343.0)
+        assert all(_equal(a[i], b[0]) for a, b in zip(rows, one))
+
+
+def test_fd_points_are_the_points_scipy_requests():
+    from scipy.optimize._numdiff import approx_derivative
+
+    lb, ub = np.array([-1.0, -1.0, 0.5]), np.array([1.0, 1.0, 4.5])
+    for z in (np.array([0.13, -0.4, 2.2]), np.array([1.0, -1.0, 4.4995]), np.array([0.9995, 0.0, 0.5])):
+        asked = []
+
+        def workers(_f, xs):
+            out = []
+            for x in xs:
+                asked.append(np.copy(x))
+                out.append(np.atleast_1d(0.0))
+            return out
+
+        approx_derivative(lambda x: 0.0, z, method="2-point", abs_step=1e-3, bounds=(lb, ub), f0=0.0, workers=workers)
+        predicted = score._fd_points(z, 1e-3, lb, ub)
+        assert len(predicted) == len(asked) == 3
+        assert all(np.array_equal(a, b) for a, b in zip(predicted, asked))   # exact: they are the cache keys
+
+
+def test_batched_refinement_matches_the_frozen_oracle(monkeypatch):
+    """The batched refine_in_cell gives bit-identical results to the one-at-a-time version, for the right and the
+    swapped assignment, under both likelihoods."""
+    from doppler import cascade as cs
+
+    from . import _scoring_oracle as oracle
+
+    ts, mic, evs = _two_track_setup()
+    xyz = mic + FRAME.enu_to_ecef(np.array([70.0, 40.0, 1.5])) - FRAME.enu_to_ecef(np.array([0.0, 0.0, 1.5]))
+    for assignment, likelihood in (((0, 1), "huber"), ((1, 0), "calibrated")):
+        p = score.ScoreParams(likelihood=likelihood)
+        ridges = score.prepare_ridges(evs, p)
+        hyp = cs.Hypothesis(1, assignment, (-5.0, 5.0))
+        init = score.score_hypothesis(hyp, ridges, ts, xyz, START, 343.0, p, (-10.0, 10.0))
+        new = score.refine_in_cell(hyp, ridges, ts, xyz, 100.0, START, 343.0, p, init, (-10.0, 10.0))
+        with monkeypatch.context() as m:
+            m.setattr(tracks.TrackSet, "_sample_one", oracle.sample_one)
+            old = oracle.refine_in_cell(hyp, ridges, ts, xyz, 100.0, START, 343.0, p, init, (-10.0, 10.0))
+        assert new[0].cost == old[0].cost and new[0].dt_s == old[0].dt_s
+        assert _equal(new[0].f0_hz, old[0].f0_hz) and _equal(new[0].per_event_cost, old[0].per_event_cost) and _equal(new[0].rms_hz, old[0].rms_hz)
+        assert _equal(new[1], old[1]) and _equal(new[2], old[2])
+
+
+@pytest.mark.heavy                 # ~60-90 s: two full rank_cells runs over a cascade's survivors
+def test_rank_cells_is_bit_identical_to_the_frozen_oracle(monkeypatch):
+    """rank_cells with batched refinement and packed sampling reproduces the one-at-a-time version on every
+    surviving cell of a clean two-event scenario: score, Δt, f0, assignment and refined position."""
+    import cli
+    from doppler import cascade as cs, geo
+
+    from . import _scoring_oracle as oracle
+    from .conftest import START as T0
+    from .test_cascade import C, P, prepared_tracks, region_circle, ridge_events, scenario
+
+    sc = scenario(0, 120.0, (30.0, 90.0))
+    ev = ridge_events(sc)
+    ts = tracks.build_trackset(prepared_tracks(sc), T0 - 120, T0 + 180, 0.25)
+    prior = cs.dt_prior_from("known", T0, None, 10.0, 120.0)
+    spec = geo.make_grid_spec(region_circle(), 200.0, P.tile_cells)
+    sp = score.ScoreParams.from_dict(cli.load_config("config.yaml")["score"])
+    cells = []
+    for r in cs.iter_cascade(spec, ev, ts, prior, geo.FlatDEM(1600.0), 1.5, C, P):
+        for h in np.flatnonzero(r.silence):
+            cid = int(spec.cell_ids(r.tile.i[h], r.tile.j[h]))
+            hyps = [cs.Hypothesis(cid, tuple(int(k) for k in r.hypotheses.tracks[q]),
+                                  (float(r.hypotheses.dt_lo_s[q]), float(r.hypotheses.dt_hi_s[q])))
+                    for q in np.flatnonzero(r.hypotheses.cell == h)]
+            cells.append((cid, r.tile.xyz[h].copy(), hyps, float(r.silence_penalty[h])))
+    assert len(cells) > 100
+    args = (ev, cells, ts, T0, C, sp, (prior.dt_lo_s, prior.dt_hi_s), 100.0)
+    new = score.rank_cells(*args)
+    with monkeypatch.context() as m:
+        m.setattr(score, "refine_in_cell", oracle.refine_in_cell)
+        m.setattr(tracks.TrackSet, "_sample_one", oracle.sample_one)
+        old = score.rank_cells(*args)
+    assert [r.cell_id for r in new] == [r.cell_id for r in old]
+    for a, b in zip(new, old):
+        assert a.best.cost == b.best.cost and a.best.dt_s == b.best.dt_s and a.best.assignment == b.best.assignment
+        assert _equal(a.best.f0_hz, b.best.f0_hz) and _equal(a.xyz_est, b.xyz_est) and a.refined == b.refined
