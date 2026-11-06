@@ -261,6 +261,8 @@ viewer:
   max_time_px: 1500          # display-only downsampling of the spectrogram
   max_freq_px: 400
   max_candidates: 20
+  map_style: open-street-map # Map tab basemap (plotly scattermap style); tiles need a network connection
+  map_max_cells: 20000       # scored cells drawn on the Map tab (best first; display only)
 
 synth:
   seed: 0
