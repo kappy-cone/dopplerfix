@@ -72,6 +72,7 @@ doppler/
   classify.py         # event prop/jet labeling from spectral character
   aircraft_types.py   # icao24 → type code → prop/jet lookup
   tracks.py           # ADS-B loading, cleaning, interpolation
+  adsblol.py          # adsb.lol daily trace archives -> the canonical track schema
   geo.py              # CRS/ENU conversions, DEM sampling, grids, spatial indexing
   cascade.py          # CPA prefilter, offset filter, silence filter, stage counts
   score.py            # full curve modeling + locked N-event scoring
@@ -79,9 +80,12 @@ doppler/
   plot.py             # diagnostics
   synth.py            # synthetic scenarios: tracks + hidden mic + audio
   realism.py          # realism layer for synthetic scenarios (ADS-B, source, path, scene degradations)
-  countermeasures.py  # apply audio processing and rerun the pipeline
   evaluate.py         # validation metrics, outcome tiers, failure taxonomy (read-only diagnostics)
-cli.py                # subcommands: events, tracks, locate, synth, ablate, clean, countermeasures
+  nulltest.py         # time-shift null tests (report-only diagnostic)
+  commitment.py       # blind result commitment: hash of the top candidates before truth is read
+  countermeasures.py  # (planned, milestone 8) apply audio processing and rerun the pipeline
+cli.py                # subcommands: synth, events, tracks, adsblol, regions, locate, verify-result, ablate, clean
+                      # (countermeasures: planned, milestone 8)
 inputs/               # committed: search_regions.gpkg
 qgis/                 # committed: doppler_template.qgz, styles/*.qml, build_project.py
 tests/
