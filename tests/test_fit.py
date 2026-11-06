@@ -171,3 +171,23 @@ def test_handoff_continue_keeps_peeling_after_a_seed_with_no_ridge(monkeypatch):
     calls["n"] = 0
     got = _peel(x, fs, handoff_continue=True)
     assert any(abs(e.t_cpa_received_s - (30.0 + 300.0 / 343.0)) < 1.0 for e in got)
+
+
+def test_handoff_guard_rejects_implausible_fits_and_keeps_plausible_ones(monkeypatch):
+    from types import SimpleNamespace
+
+    from doppler.ridge import RidgeParams
+
+    rp, w = RidgeParams(), EventWindow(0.0, 60.0, (40.0, 900.0))
+    ok = SimpleNamespace(t_cpa_received_s=30.0, v_mps=60.0, d_m=300.0)
+    assert fit.handoff_plausible(ok, w, rp)
+    for bad in (dict(t_cpa_received_s=61.0), dict(t_cpa_received_s=-1.0), dict(v_mps=320.0), dict(v_mps=30.0),
+                dict(d_m=60.0 * 81), dict(d_m=60.0)):           # CPA outside the window; v, d / v outside the Hough ranges
+        assert not fit.handoff_plausible(SimpleNamespace(**{**vars(ok), **bad}), w, rp)
+    assert not RidgeParams().handoff_guard
+    x, fs = _harmonics_only_audio()
+    key = lambda fits: [(e.t_cpa_received_s, e.f0_hz, e.v_mps, e.d_m) for e in fits]  # noqa: E731
+    h1 = key(_peel(x, fs, handoff_harmonics=True))
+    assert key(_peel(x, fs, handoff_harmonics=True, handoff_guard=True)) == h1      # the recovered pass is plausible
+    monkeypatch.setattr(fit, "handoff_plausible", lambda *a: False)
+    assert key(_peel(x, fs, handoff_harmonics=True, handoff_guard=True)) == key(_peel(x, fs))  # rejected = no hand-off

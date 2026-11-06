@@ -47,6 +47,8 @@ class RidgeParams:
     hough_nms_s: float = 4.0
     handoff_harmonics: bool = False  # U19 arm h1: on a short guided ridge, try the seed's harmonics 2..hough_harmonics
     handoff_continue: bool = False   # U19 arm h2: if still none, mask the seed's family and keep peeling the window
+    handoff_guard: bool = False      # U19 arm h1g: keep a hand-off fit only if its CPA lies in the window and its v
+                                     # and d / v lie in the Hough search ranges (hough_v_range_mps, hough_tau_range_s)
     floor_mode: str = "freq"       # see audio.background_db
     floor_halfwidth_hz: float = 20.0
 

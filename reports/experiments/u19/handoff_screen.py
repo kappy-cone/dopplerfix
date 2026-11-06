@@ -3,7 +3,8 @@
 Registered in reports/apriori_registry.md ("U19 task 4: arm h") before this screen. Per unit (scenario rebuilt
 exactly as `cli.py ablate` does; same audio for every arm, so paired by audio), per arm, `cli.run_events` with
 the arm's config overlay on the current default (arm b on):
-- base: current default; h1: ridge.handoff_harmonics; h2: ridge.handoff_continue; h12: both.
+- base: current default; h1: ridge.handoff_harmonics; h2: ridge.handoff_continue; h12: both;
+  h1g: h1 + ridge.handoff_guard (registered separately, "Arm h1g").
 Per truth event: matched fit (evaluate.match_events, match_tol_s) and its |Δv| / v, |Δd| / d. Per run: spurious
 fits (unmatched), and of those the extra fits within match_tol_s of a truth CPA (arm b's V1 loss mechanism),
 plus detection wall time.
@@ -38,6 +39,7 @@ ARMS = {
     "h1": {"ridge": {"handoff_harmonics": True}},
     "h2": {"ridge": {"handoff_continue": True}},
     "h12": {"ridge": {"handoff_harmonics": True, "handoff_continue": True}},
+    "h1g": {"ridge": {"handoff_harmonics": True, "handoff_guard": True}},
 }
 
 

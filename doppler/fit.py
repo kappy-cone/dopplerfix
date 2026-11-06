@@ -215,6 +215,16 @@ def _descent(ridge: Ridge) -> float:
     return float((np.median(ridge.f_hz[:q]) - np.median(ridge.f_hz[-q:])) / np.median(ridge.f_hz))
 
 
+def handoff_plausible(est: EventFit, window: EventWindow, rp: RidgeParams) -> bool:
+    """U19 arm h1g: a hand-off fit's CPA (received) lies inside its window, and its v and d / v inside the Hough
+    seed's search ranges (``hough_v_range_mps``, ``hough_tau_range_s``). Uses no value of its own."""
+    v0, v1 = rp.hough_v_range_mps
+    tau0, tau1 = rp.hough_tau_range_s
+    tau = est.d_m / est.v_mps if est.v_mps > 0 else np.inf
+    return bool(window.start_s <= est.t_cpa_received_s <= window.end_s and v0 <= est.v_mps <= v1
+                and tau0 <= tau <= tau1)
+
+
 def characterize_window(spec: Spectrogram, full_Z: NDArray, window: EventWindow,
                         ridge_params: RidgeParams = RidgeParams(), fit_params: FitParams = FitParams(),
                         c: float = ph.DEFAULT_C) -> list[EventFit]:
@@ -249,19 +259,24 @@ def characterize_window(spec: Spectrogram, full_Z: NDArray, window: EventWindow,
             h = seeds[0]
             f_seed = ph.straight_freq_received(t_win, h.f0_hz, h.v_mps, h.d_m, h.t0_s, c)
             g = guided_ridge(spec, Zw, fi, ti, f_seed, rp, window, full_Z)
+            handoff = False
             if g is None and rp.handoff_harmonics:
                 g = harmonic_handoff(spec, Zw, fi, ti, f_seed, rp, window, full_Z)
+                handoff = g is not None
+            if g is not None:
+                est = fit_ridge(g, window, fp, c, hop, spec.window_s)
+                for _pass in range(rp.guided_passes):
+                    g2 = guided_ridge(spec, Zw, fi, ti, est.model(t_win), rp, window, full_Z)
+                    if g2 is None:
+                        break
+                    est = fit_ridge(g2, window, fp, c, hop, spec.window_s)
+                if handoff and rp.handoff_guard and not handoff_plausible(est, window, rp):
+                    g = None                       # a rejected hand-off counts as no hand-off
             if g is None:
                 if rp.handoff_continue:
                     mask_family(Zw, f_sub, cols, f_seed, rp.mask_halfwidth_hz)
                     continue
                 break
-            est = fit_ridge(g, window, fp, c, hop, spec.window_s)
-            for _pass in range(rp.guided_passes):
-                g2 = guided_ridge(spec, Zw, fi, ti, est.model(t_win), rp, window, full_Z)
-                if g2 is None:
-                    break
-                est = fit_ridge(g2, window, fp, c, hop, spec.window_s)
             if _descent(est.ridge) >= fp.min_descent_frac or window.manual:
                 fits.append(est)
             subs = (1, est.ridge.subharmonic) if est.ridge.subharmonic > 1 else (1,)
