@@ -111,6 +111,30 @@ Implementation choices (no knob):
     matched fits' |Δv| / v and |Δd| / d, and detection time.
   - Paired exact sign test on truth events per config.
 
+### Arm h1g: the hand-off plausibility guard (session 8; registered before its first measurement)
+
+The arm h screen (`reports/u19.md`, "Task 4, step 2") left h1 not ruled out on recall (pooled 49 gained / 0
+lost) but ruled out as built on spurious fits (pooled 129 → 250, all-on 21 → 68). About a third of the extra
+all-on spurious fits were physically implausible. Approved by the user (session 8, option 1). Off by default.
+
+| Knob (config key) | Value when on | Source | Status | Sensitivity grid | Used by |
+|---|---|---|---|---|---|
+| `ridge.handoff_guard` | true (arm h1g = `handoff_harmonics` + `handoff_guard`) | the arm h screen's spurious breakdown. The guard reuses existing values only: the fit's received CPA inside the detection window, `v` inside `ridge.hough_v_range_mps` (35–260 m/s), `d / v` inside `ridge.hough_tau_range_s` (2–80 s), the ranges the Hough seed already searches | mode | — | `fit.characterize_window` (`fit.handoff_plausible`) |
+
+Implementation choices (no knob): the guard acts only on fits whose ridge came from the h1 hand-off, after the
+fit and its guided passes. A rejected hand-off fit is treated as no hand-off (the peel leaves the window, as in
+the base). No fit on the seed line itself is checked, so with h1 off the guard changes nothing.
+
+Screens (rule arms out only; neither is a decision run):
+1. **Detection**, exactly as the arm h screen: base, h1, h1g; six configs × seeds 0–49, paired by audio
+   (`handoff_screen.py`). h1g is ruled out if it keeps fewer than half of h1's pooled gained events, or if its
+   pooled spurious count is not below h1's.
+2. **End to end**, V1 with h1g (variant `V1h1g`) on all-on C seeds 0–49 (`cli.py ablate --plan stageA --limit 50`),
+   paired against the Stage A2 V1 rows on the same units. Measures: rank-1 accuracy (exact sign test), recall,
+   spurious events, rank-1 error and true-cell rank (Wilcoxon), timeouts. h1g is ruled out if rank-1 runs lost
+   exceed runs gained. Not ruled out is not acceptance: a default change needs its own pre-registered decision
+   run.
+
 ## Later phases
 
 These entries are listed in plan P0.7 and are added to config.yaml only when their item is built:
