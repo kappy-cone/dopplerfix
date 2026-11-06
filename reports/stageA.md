@@ -399,7 +399,7 @@ detected.
   loo:adsb (6 → 9), loo:levels (6 → 9). loo:path recall rises 18 → 26 / 40 but its accuracy stays 3 / 20.
 - Failures move from survival to discrimination and bias (V1 all-on: survival:grid 8 → 5, survival:none 5 → 1,
   discrimination 13 → 16, bias 7 → 10): runs that now keep both events reach scoring and fail there.
-  Discrimination is 16 / 31 classified V1 all-on failures (52 %), above the plan §3.0 40 % re-ordering line;
+  Discrimination is 16 / 32 classified V1 all-on failures (50 %), above the plan §3.0 40 % re-ordering line;
   the rule was written for Stage A and applying it here is the user's call.
 - Timeouts: V1 3 → 3 overall (Stage A: 5 V1 timeouts including all-on 11 and 23, loo:scene 6, which now
   finish; A2's new one is loo:geometry 18). Mean V1 run 63 s (Stage A 92 s), median 17 s, p90 133 s; V0 mean 9 s.
