@@ -89,7 +89,8 @@ def traced_window(spec, full_Z, window, rp, fp, c, band_name, wi, log):
         if g is None:
             stop = "guided_short"
             log["attempts"].append({"win": wi, "band": band_name, "kind": "guided_short",
-                                    "seed_t_cpa": h.t0_s + h.d_m / c, "seed_curve": (t_win, f_seed)})
+                                    "seed_t_cpa": h.t0_s + h.d_m / c, "seed_curve": (t_win, f_seed),
+                                    "seed": (h.f0_hz, h.v_mps, h.d_m, h.t0_s)})
             break
         est = fit_ridge(g, window, fp, c, hop, spec.window_s)
         for _pass in range(rp.guided_passes):
@@ -99,7 +100,8 @@ def traced_window(spec, full_Z, window, rp, fp, c, band_name, wi, log):
             est = fit_ridge(g2, window, fp, c, hop, spec.window_s)
         ok = _descent(est.ridge) >= fp.min_descent_frac or window.manual
         log["attempts"].append({"win": wi, "band": band_name, "kind": "fit" if ok else "no_descent", "fit": est,
-                                "seed_t_cpa": h.t0_s + h.d_m / c, "seed_curve": (t_win, f_seed)})
+                                "seed_t_cpa": h.t0_s + h.d_m / c, "seed_curve": (t_win, f_seed),
+                                "seed": (h.f0_hz, h.v_mps, h.d_m, h.t0_s)})
         if ok:
             fits.append(est)
         subs = (1, est.ridge.subharmonic) if est.ridge.subharmonic > 1 else (1,)
