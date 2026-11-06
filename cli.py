@@ -332,6 +332,13 @@ def synth_params_from(cfg: dict, args, radius_m: float) -> synth.SynthParams:
     return synth.SynthParams.from_dict(sp)
 
 
+def scenario_detection_cfg(cfg: dict) -> dict:
+    """The config the scenario builder detects with when it places cascade decoys: config.yaml with
+    ``synth.scenario_detection`` merged on. It pins the benchmark scenarios to a fixed detector, so a change of
+    the method's detection default does not also change the scenarios it is measured on."""
+    return deep_merge(cfg, section(cfg, "synth").get("scenario_detection") or {})
+
+
 def build_synth_scenario(cfg: dict, region, params: synth.SynthParams, rp, n_dec: int):
     """One synthetic scenario, with up to ``n_dec`` cascade decoys over CPA/offset survivors far from the mic
     (only the silence filter can remove those cells, so they test it; separate random stream, events unchanged).
@@ -344,7 +351,7 @@ def build_synth_scenario(cfg: dict, region, params: synth.SynthParams, rp, n_dec
     sc = synth.make_scenario(params, frame, tp.start_s, ground, c, realism=rp)
     targets, n_cands = [], 0
     if n_dec > 0:
-        _, fits0 = run_events(sc.audio, sc.fs_hz, cfg, c)
+        _, fits0 = run_events(sc.audio, sc.fs_hz, scenario_detection_cfg(cfg), c)   # decoy placement only
         tp_ = tracks.TrackParams.from_dict(section(cfg, "tracks"))
         src = sc.adsb_frame if sc.adsb_frame is not None else None
         prep = (tracks.prepare_tracks(tracks.tracks_from_frame(src, tp_), tp_) if src is not None

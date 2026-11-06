@@ -27,12 +27,16 @@ SECTIONS = [
 ]
 
 
+# keys read by cli.py itself rather than a parameter dataclass
+CLI_READ = {"synth": {"scenario_detection"}}     # cli.scenario_detection_cfg
+
+
 @pytest.mark.parametrize("section,klass,external", SECTIONS, ids=[s[0] for s in SECTIONS])
 def test_config_covers_every_parameter(section, klass, external):
     keys = set(CFG[section])
     missing = {f.name for f in dataclasses.fields(klass)} - keys - external
     assert not missing, f"config.yaml [{section}] is missing {sorted(missing)}"
-    unknown = keys - {f.name for f in dataclasses.fields(klass)} - {"source", "path", "columns"}
+    unknown = keys - {f.name for f in dataclasses.fields(klass)} - {"source", "path", "columns"} - CLI_READ.get(section, set())
     assert not unknown, f"config.yaml [{section}] has keys no code reads: {sorted(unknown)}"
 
 

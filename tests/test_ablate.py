@@ -147,3 +147,33 @@ def test_summary_reads_each_variants_own_events_file(tmp_path):
             {"scenario": "C", "config": "all", "seed": 3, "variant": "V1"}]
     assert cli._fill_detection(rows, tmp_path, ev.EvalParams(), CFG) == (2, 0)
     assert rows[0]["truth_events_detected"] == 2 and rows[1]["truth_events_detected"] == 1
+
+
+def test_scenario_builder_places_decoys_with_the_pinned_detector(monkeypatch):
+    """The benchmark scenarios do not follow the method's detection default (synth.scenario_detection)."""
+    assert (CFG.get("detect") or {}).get("long_window_s") == 3.0
+    pinned = cli.scenario_detection_cfg(CFG)
+    assert pinned["detect"]["long_window_s"] is None
+    assert {k: v for k, v in pinned["detect"].items() if k != "long_window_s"} == \
+        {k: v for k, v in CFG["detect"].items() if k != "long_window_s"}
+    assert cli.detection_key(pinned) == cli.detection_key(cli.apply_variant(CFG, "V1-preU19"))
+    seen = []
+
+    class _Stop(Exception):
+        pass
+
+    def fake_run_events(x, fs, cfg, c):
+        seen.append(cfg["detect"]["long_window_s"])
+        raise _Stop
+
+    monkeypatch.setattr(cli, "run_events", fake_run_events)
+    _, region = cli.load_region(CFG, None)
+    _, radius = cli.region_frame(region)
+    dur, times = cli.ABLATION_SCENARIOS["C"]
+    sp = dict(CFG.get("synth") or {})
+    sp.update(seed=0, duration_s=dur, event_rx_times_s=list(times), event_classes=None,
+              audible_slant_m=cli.section(CFG, "cascade").get("audible_slant_m"), region_radius_m=radius)
+    params = cli.synth.SynthParams.from_dict(sp)
+    with pytest.raises(_Stop):
+        cli.build_synth_scenario(CFG, region, params, cli.realism_for(CFG, "clean"), 3)
+    assert seen == [None]

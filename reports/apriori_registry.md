@@ -74,6 +74,7 @@ threshold are untouched: the arms only add rows to the max-over-rows statistic.
 | `detect.harmonic_n` | 3 | as `ridge.hough_harmonics` (the seeding matched filter's harmonic count) | PROVISIONAL | 2, 3, 5 | `detect.harmonic_statistic` |
 | `detect.long_window_s` | 3.0 (arm b; **default since U19**, session 8) | plan §8.2 "2–4 s" (the doppler.txt resolution step); midpoint | PROVISIONAL until milestone 4.5: re-check on field recordings, above all spurious events from stationary lines (hum) and wind | 2, 3, 4 | `detect.detect_events_audio` |
 | `detect.low_band_hz` | [20, 100] (arm c) | upper edge: the recording high-pass corner (`realism` scene, 100 Hz); lower edge: the conventional lower limit of audio | PROVISIONAL | lower edge 20, 30, 40 | `detect.DetectParams.prop_bands` |
+| `synth.scenario_detection` | `{detect: {long_window_s: null}}` | not a method knob: it fixes the benchmark. The scenario builder places cascade decoys from detected events, so without a pin a detection-default change also changes the scenarios. Pinned to the detector Stage A / U18 / U19 scenarios were built with (user decision, session 8) | FIXED (benchmark definition; change only by a recorded re-baseline) | — | `cli.build_synth_scenario` |
 
 Implementation choices (no knob):
 - **Arm a.** Per frame, the max over fundamentals f in [lo, hi/n] of the mean excess at f, 2f, …, n·f. Each harmonic

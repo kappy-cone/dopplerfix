@@ -274,6 +274,10 @@ viewer:
 synth:
   seed: 0
   n_cascade_decoys: 3        # cli synth --cascade-decoys: decoys over CPA/offset survivors far from the mic
+  # The detector the scenario builder uses to place those decoys, merged onto this config for that step only.
+  # Pinned to the pre-U19 detection (arm b off), so the benchmark scenarios stay those of Stage A / U18 / U19
+  # when the method's detection default changes (user decision, session 8; reports/apriori_registry.md).
+  scenario_detection: {detect: {long_window_s: null}}
   duration_s: 600
   fs_hz: 8000
   n_tracks: 3                # legacy layout, used only when event_rx_times_s is null
