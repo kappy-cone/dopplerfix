@@ -87,6 +87,9 @@ ridge:                       # prop band, main spectrogram
   floor_mode: freq
   floor_halfwidth_hz: 20.0
   seed_mode: hough           # hough (Doppler matched filter; robust to crossing ridges) | dp
+  # U19 task 4 arm h (reports/apriori_registry.md; off by default): on a short guided ridge around the Hough seed,
+  handoff_harmonics: false   # (h1) try the seed's harmonics m = 2 .. hough_harmonics, keep the longest ridge
+  handoff_continue: false    # (h2) if none, mask the seed's family and continue the peel instead of leaving the window
   hough_dlogf: 0.008
   hough_dt_s: 0.5
   hough_cap_db: 25.0
@@ -108,6 +111,7 @@ ridge_jet:                   # jet band, jet spectrogram (keys not given fall ba
   guide_hz: 8.0
   mask_halfwidth_hz: 10.0
   hough_harmonics: 1
+  handoff_continue: false    # arm h2 acts on the prop band only (the step-1 evidence)
 
 fit:
   v_bounds_mps: [10, 320]

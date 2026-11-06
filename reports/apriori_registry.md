@@ -86,6 +86,31 @@ Implementation choices (no knob):
 - **Arm c.** The low band is one more row of the main spectrogram's tonal statistic, so it gets its own
   (smaller-N) noise baseline. The ridge search band (`detect.band_hz`) is unchanged.
 
+## U19 task 4: arm h, the seed-to-ridge hand-off (session 8; before the hand-off screen)
+
+Registered before the first measurement of the arm. The diagnostic that motivates it (`reports/u19.md`, "Task 4,
+step 1") measured no arm. Approved by the user (session 8). Off by default, so V0 / V1 are unchanged. Both knobs
+are modes; neither adds a number. `ridge.guide_hz`, `ridge.weak_db`, `ridge.min_points` and every other threshold
+are untouched.
+
+| Knob (config key) | Value when on | Source | Status | Sensitivity grid | Used by |
+|---|---|---|---|---|---|
+| `ridge.handoff_harmonics` | true (arms h1, h12) | step-1 diagnostic: on short guided ridges whose seed is on a missed event's line, the seed line holds a median 11 strong columns and its 2nd / 3rd harmonics 258 / 120. Harmonics tried: m = 2 … `ridge.hough_harmonics` (3), those the seed statistic already sums | mode | — | `fit.characterize_window` |
+| `ridge.handoff_continue` | true (arms h2, h12), prop band only (`ridge_jet: false`) | step-1 diagnostic: 16 missed events lost to the `break` after a seed on another line. The peel stays bounded by `max_ridges + 2` attempts | mode | — | `fit.characterize_window` |
+
+Implementation choices (no knob):
+- **h1.** On a short guided ridge, `guided_ridge` runs around m × the seed curve for each m. The ridge with the
+  most points is kept, ties going to the lower m. The fit, the guided passes, the descent check and the masking
+  (the fitted curve's family and the seed curve's family) are the same as for a ridge on the seed line. The jet
+  band has `hough_harmonics: 1`, so h1 cannot act there.
+- **h2.** When no ridge results, the seed curve's harmonic family is masked (±`mask_halfwidth_hz`) and the peel
+  continues with the next seed, instead of leaving the window.
+- **Screen** (rules arms out only): h1, h2 and h12 against the current default (arm b on), six configs (clean,
+  all-on, loo:path, loo:levels, loo:scene, sub:reflection), seeds 0–49, paired by audio.
+  - Measures: recall, spurious events per run, extra fits within `evaluate.match_tol_s` of a truth CPA, the
+    matched fits' |Δv| / v and |Δd| / d, and detection time.
+  - Paired exact sign test on truth events per config.
+
 ## Later phases
 
 These entries are listed in plan P0.7 and are added to config.yaml only when their item is built:
