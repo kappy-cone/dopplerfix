@@ -20,8 +20,8 @@ from .audio import Spectrogram, SpectrogramParams, background_db, compute_spectr
 from .classify import ClassFeatures, ClassifyParams, broadband_rise_db, decide, harmonic_count
 from .detect import Detection
 from .detect import EventWindow
-from .ridge import (Ridge, RidgeParams, _dp_path, _finish_ridge, doppler_hough, guided_ridge, mask_family,
-                    robust_std)
+from .ridge import (Ridge, RidgeParams, _dp_path, _finish_ridge, doppler_hough, guided_ridge, harmonic_handoff,
+                    mask_family, robust_std)
 
 PARAM_NAMES = ("f0_hz", "v_mps", "d_m", "t0_s")  # (+ "drift_per_s" when the drift prior is on)
 
@@ -249,7 +249,12 @@ def characterize_window(spec: Spectrogram, full_Z: NDArray, window: EventWindow,
             h = seeds[0]
             f_seed = ph.straight_freq_received(t_win, h.f0_hz, h.v_mps, h.d_m, h.t0_s, c)
             g = guided_ridge(spec, Zw, fi, ti, f_seed, rp, window, full_Z)
+            if g is None and rp.handoff_harmonics:
+                g = harmonic_handoff(spec, Zw, fi, ti, f_seed, rp, window, full_Z)
             if g is None:
+                if rp.handoff_continue:
+                    mask_family(Zw, f_sub, cols, f_seed, rp.mask_halfwidth_hz)
+                    continue
                 break
             est = fit_ridge(g, window, fp, c, hop, spec.window_s)
             for _pass in range(rp.guided_passes):

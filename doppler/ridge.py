@@ -45,6 +45,8 @@ class RidgeParams:
     hough_tau_step: float = 0.3    # log step
     hough_t0_margin_s: float = 20.0
     hough_nms_s: float = 4.0
+    handoff_harmonics: bool = False  # U19 arm h1: on a short guided ridge, try the seed's harmonics 2..hough_harmonics
+    handoff_continue: bool = False   # U19 arm h2: if still none, mask the seed's family and keep peeling the window
     floor_mode: str = "freq"       # see audio.background_db
     floor_halfwidth_hz: float = 20.0
 
@@ -193,6 +195,21 @@ def guided_ridge(spec: Spectrogram, Zsub: NDArray, fi: NDArray, ti: NDArray, f_m
     path = np.clip(rows[best, np.arange(len(ti))], 0, len(fi) - 1)
     exc = vals[best, np.arange(len(ti))]
     return _finish_ridge(spec, full_Z, fi, ti, path, exc, params, window)
+
+
+def harmonic_handoff(spec: Spectrogram, Zsub: NDArray, fi: NDArray, ti: NDArray, f_seed: NDArray,
+                     params: RidgeParams, window: EventWindow, full_Z: NDArray) -> Ridge | None:
+    """U19 arm h1: the guided ridge around m × the seed curve, m = 2 .. hough_harmonics, with the most points.
+
+    For a seed found through its harmonics while its own line is weak (the seed statistic sums
+    ``hough_harmonics`` harmonics). Ties go to the lower m. None if no harmonic gives a ridge.
+    """
+    best = None
+    for m in range(2, params.hough_harmonics + 1):
+        g = guided_ridge(spec, Zsub, fi, ti, m * f_seed, params, window, full_Z)
+        if g is not None and (best is None or len(g) > len(best)):
+            best = g
+    return best
 
 
 def _finish_ridge(spec, full_Z, fi, ti, path, exc, params: RidgeParams, window) -> Ridge | None:
