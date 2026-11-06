@@ -101,3 +101,33 @@ def test_config_provenance_reports_overrides(tmp_path):
     p.write_text(yaml.safe_dump(edited))
     prov = cli.config_provenance(edited, p)
     assert prov["config_overrides"]["cascade.n_sigma"] == [CFG["cascade"]["n_sigma"], 2.5]
+
+
+def _need_calls(path: str) -> set[tuple[str, str]]:
+    """(section, key) of every ``need(cfg, "section", "key")`` call in a source file."""
+    import ast
+    from pathlib import Path
+
+    out = set()
+    for node in ast.walk(ast.parse(Path(path).read_text())):
+        if (isinstance(node, ast.Call) and getattr(node.func, "id", getattr(node.func, "attr", None)) == "need"
+                and len(node.args) == 3 and all(isinstance(a, ast.Constant) for a in node.args[1:])):
+            out.add((node.args[1].value, node.args[2].value))
+    return out
+
+
+def test_every_strict_read_has_a_config_key():
+    """cli.need() has no fallback, so each key it reads must be in config.yaml (and in every variant)."""
+    calls = _need_calls("cli.py")
+    assert len(calls) >= 15, "the AST scan found too few need() calls; has the helper been renamed?"
+    for name in [None, *CFG.get("variants", {})]:
+        cfg = CFG if name is None else cli.apply_variant(CFG, name)
+        missing = sorted(f"[{s}] {k}" for s, k in calls if k not in (cfg.get(s) or {}))
+        assert not missing, f"config.yaml{'' if name is None else f' (variant {name})'} lacks {missing}"
+
+
+def test_need_names_the_missing_key():
+    with pytest.raises(KeyError, match=r"\[mic\] is missing 'height_agl_m'"):
+        cli.need({"mic": {}}, "mic", "height_agl_m")
+    with pytest.raises(KeyError, match=r"\[mic\]"):
+        cli.need({}, "mic", "height_agl_m")
