@@ -95,6 +95,11 @@ def handoff_table(path: str) -> None:
         med = lambda k: float(np.median([x[k] for x in h]))  # noqa: E731
         unm = sum(x["unmasked_ridge_points"] is not None for x in h)
         prior = sum(x["n_prior_fits"] > 0 for x in h)
+        hm = {m: float(np.median([x["strong_masked_by_harmonic"][m] for x in h])) for m in ("0.5", "1.5", "2.0", "3.0")}
+        fs_ = float(np.median([x["f_seed_median_hz"] for x in h]))
+        best_m = sum(max(x["strong_masked_by_harmonic"].values()) >= x["min_points"] for x in h)
+        print(f"  ({label}) seed line median {fs_:.0f} Hz; strong columns at m x seed, masked medians {hm}; "
+              f"some m >= min_points in {best_m}")
         print(f"- {label}: n {len(B)}; strong columns in corridor, masked median {med('strong_masked'):.0f}, "
               f"unmasked median {med('strong_unmasked'):.0f} (min_points {h[0]['min_points']}); unmasked excess "
               f"gives a ridge in {unm}; a fit already peeled from the window in {prior}")
