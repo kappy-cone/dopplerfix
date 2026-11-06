@@ -83,7 +83,7 @@ def attempt_row(a, curves, truth, detected, rp, c):
             "n_frames": int(ok.sum()), "median_df_hz": float(np.median(df)), "p90_df_hz": float(np.percentile(df, 90)),
             "median_rel": float(np.median(np.abs(f_seed[ok] / (k * ft[ok]) - 1.0))),
             "frac_within_guide": float(np.mean(df <= rp.guide_hz)), "k_f_mean_hz": float(np.mean(k * ft[ok])),
-            **steps}
+            **steps, **({"handoff": a["handoff"]} if "handoff" in a else {})}
 
 
 def one(unit):

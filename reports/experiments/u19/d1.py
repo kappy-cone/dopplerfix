@@ -57,6 +57,24 @@ ON_CURVE_FRAC = 0.5        # a ridge "follows" a truth curve if half its points 
 # ---------------------------------------------------------------------------
 # Traced copy of fit.characterize_window / characterize_audio (logic unchanged; records each step)
 # ---------------------------------------------------------------------------
+def handoff_diag(spec, Zw, Zw0, fi, ti, f_seed, rp, window, full_Z, n_prior_fits):
+    """Why a guided ridge came back short: strong columns (corridor max >= weak_db) in the masked and the unmasked
+    excess, and whether the unmasked excess would have given a ridge (diagnostic only)."""
+    g = max(1, int(round(rp.guide_hz / spec.df_hz)))
+    centre = np.rint((f_seed - spec.f_hz[fi[0]]) / spec.df_hz).astype(int)
+    rows = centre[None, :] + np.arange(-g, g + 1)[:, None]
+    valid = (rows >= 0) & (rows < len(fi))
+    cidx = np.arange(len(ti))[None, :]
+
+    def strong(Z):
+        v = np.where(valid, Z[np.clip(rows, 0, len(fi) - 1), cidx], -np.inf).max(axis=0)
+        return int((v >= rp.weak_db).sum())
+
+    r0 = guided_ridge(spec, Zw0, fi, ti, f_seed, rp, window, full_Z)
+    return {"strong_masked": strong(Zw), "strong_unmasked": strong(Zw0), "n_prior_fits": n_prior_fits,
+            "unmasked_ridge_points": None if r0 is None else len(r0), "min_points": rp.min_points}
+
+
 def traced_window(spec, full_Z, window, rp, fp, c, band_name, wi, log):
     ti = np.flatnonzero((spec.t_s >= window.start_s) & (spec.t_s <= window.end_s))
     fi = np.flatnonzero((spec.f_hz >= window.band_hz[0]) & (spec.f_hz <= window.band_hz[1]))
@@ -66,6 +84,7 @@ def traced_window(spec, full_Z, window, rp, fp, c, band_name, wi, log):
         return []
     assert rp.seed_mode == "hough"
     Zw = np.clip(full_Z[np.ix_(fi, ti)], -10.0, 60.0)
+    Zw0 = Zw.copy()                       # unmasked, for the hand-off diagnostic only
     hop = spec.hop_s
     cols = np.arange(len(ti))
     t_win = spec.t_s[ti]
@@ -90,7 +109,9 @@ def traced_window(spec, full_Z, window, rp, fp, c, band_name, wi, log):
             stop = "guided_short"
             log["attempts"].append({"win": wi, "band": band_name, "kind": "guided_short",
                                     "seed_t_cpa": h.t0_s + h.d_m / c, "seed_curve": (t_win, f_seed),
-                                    "seed": (h.f0_hz, h.v_mps, h.d_m, h.t0_s)})
+                                    "seed": (h.f0_hz, h.v_mps, h.d_m, h.t0_s),
+                                    "handoff": handoff_diag(spec, Zw, Zw0, fi, ti, f_seed, rp, window, full_Z,
+                                                            len(fits))})
             break
         est = fit_ridge(g, window, fp, c, hop, spec.window_s)
         for _pass in range(rp.guided_passes):
