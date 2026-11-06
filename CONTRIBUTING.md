@@ -59,6 +59,44 @@ conventions keep that safe. They add to CLAUDE.md (methodology, rules) and the p
   its report (e.g. `reports/data/stageA_rows.jsonl.gz`), so a reviewer on another machine can recompute the
   numbers. Screens and other runs stay in `outputs/` (gitignored).
 
+### 4.1 Smoke run before every long run
+**When:** before every decision run, ablation or screen, and any other job expected to take more than about
+15 min.
+
+**Why:** a wiring mistake wastes the whole run and is found only at the end. U19's decision run, attempt 1, ran
+56 min with arm b never applied (`reports/u19.md`). Its validity checks passed, because they tested that the
+arm changed *only* detection, not that it changed anything. A few units show that kind of error in about
+5 min.
+
+**How:**
+- Same commit, same machine and same command as the real run, limited to 2–4 units (`--limit 3` for
+  `cli.py ablate`).
+- Write to a scratch folder, e.g. `outputs/smoke/<run name>`, never the real run's `--out`. `ablate` resumes
+  from an existing `rows.jsonl`: smoke rows left there count as done, so the real run would skip those units
+  and keep the smoke rows as its results.
+
+**Checklist** (each item answered from the smoke output; "it ran without crashing" is not a pass):
+1. **The arm is applied.** What the run varies shows up in the rows as different from the reference: its
+   config overlay, its key or hash (e.g. `detection_sha256`), its intermediate files. If the arm's outputs
+   equal the reference's on every smoke unit, find out why before going on.
+2. **The rows are complete.** Every field the analysis reads is present and filled. Load the smoke rows with
+   the analysis script's loader, or with a few lines of code, to check fields only.
+3. **Provenance.** The recorded commit is the intended clean `main` (or tag), the tree is clean, and the config
+   hash is the expected one. If it moved since the rule or the reference was fixed, say why in the report.
+4. **Output folder.** The real run's `--out` does not exist yet, or holds only rows from this same run.
+5. **Time and disk.** Smoke wall time per unit × units ÷ jobs gives a rough estimate; check it against the
+   plan, the free disk (`--min-free-gb`) and any other load on the machine.
+
+**Don't read outcomes.** The smoke units are usually seeds of the real run. Read only the wiring fields above,
+not accuracy, ranks or criteria, and don't run the decision analysis on smoke rows. The pre-registered rule is
+already fixed, so a glimpse cannot change it, but skipping the outcomes keeps it clean.
+
+**Record:** one line in the run's report, e.g. "Smoke run: 3 units at `<commit>`, checks 1–5 passed." Smoke rows
+are never committed or used as results; delete them afterwards.
+
+**If a check fails:** stop and fix it first, through a PR as usual. Repeat the smoke run on the new commit, and
+only then start the real run.
+
 ## 5. Ownership: avoid two sessions in the same files
 - **Each session prompt states its scope** (files or modules it may change). Two sessions never take the
   same module at the same time.
