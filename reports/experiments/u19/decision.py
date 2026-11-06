@@ -24,6 +24,7 @@ from doppler import evaluate as ev  # noqa: E402
 REF_FILES = ("reports/data/stageA_rows.jsonl.gz", "reports/data/u18_rows.jsonl.gz")
 DET_FILES = ("reports/data/stageA_detection.json", "reports/data/u18_detection.json")
 SEEDS = range(100)
+PRE_U19 = "V1-preU19"     # the reference's detection, once arm b became the default (session 8)
 ALPHA = 0.05                 # C1: two-sided exact sign test
 SPURIOUS_RATIO = 1.25        # C2: upper limit of the conventional 0.80-1.25 equivalence range
 SNR_EDGES = (-float("inf"), 1, 2, 3, 4, 6, 8, float("inf"))
@@ -91,7 +92,7 @@ def arm_applied(by, cfg: dict) -> dict:
     unrecorded = sum(r.get("detection_sha256") is None for r in rows)
     wrong = sum(r.get("detection_sha256") not in (None, want) for r in rows)
     ok = (bool(rows) and unrecorded == 0 and wrong == 0 and want == detection_key(apply_variant(cfg, "V0b"))
-          and want != detection_key(apply_variant(cfg, "V1")))
+          and want != detection_key(apply_variant(cfg, PRE_U19 if PRE_U19 in (cfg.get("variants") or {}) else "V1")))
     return {"ok": ok, "rows": len(rows), "unrecorded": unrecorded, "wrong": wrong}
 
 

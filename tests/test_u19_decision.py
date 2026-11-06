@@ -20,7 +20,8 @@ def test_arm_applied_requires_the_arms_own_detection_record():
     arm = cli.detection_key(cli.apply_variant(CFG, "V1b"))
     assert decision.arm_applied(_rows(arm), CFG)["ok"]
     assert not decision.arm_applied(_rows(None), CFG)["ok"]                    # rows from before the fix
-    assert not decision.arm_applied(_rows(cli.detection_key(CFG)), CFG)["ok"]  # base detection: arm not applied
+    pre = cli.detection_key(cli.apply_variant(CFG, "V1-preU19"))
+    assert not decision.arm_applied(_rows(pre), CFG)["ok"]                     # pre-U19 detection: arm not applied
     rows = _rows(arm)
     rows[("V1b", 0)] = {"outcome": "timeout"}                                  # timeout rows carry no record
     assert decision.arm_applied(rows, CFG)["ok"]

@@ -101,13 +101,15 @@ def test_paired_tests_pair_by_seed():
 
 def test_detection_key_follows_detection_sections_only():
     base = cli.detection_key(CFG)
-    for v in ("V0", "V1", "V0c", "V1c"):                      # cascade / scoring overlays: same detection
+    assert (CFG.get("detect") or {}).get("long_window_s") == 3.0          # arm b is the default since U19
+    for v in ("V0", "V1", "V0c", "V1c", "V0b", "V1b"):        # cascade / scoring overlays, or arm b = default
         assert cli.detection_key(cli.apply_variant(CFG, v)) == base
         assert cli.events_file_name(cli.apply_variant(CFG, v), CFG) == "events.parquet"
-    for v in ("V0b", "V1b"):                                   # detect.long_window_s: own detection
+    for v in ("V0-preU19", "V1-preU19"):                       # detect.long_window_s null: own detection
         assert cli.detection_key(cli.apply_variant(CFG, v)) != base
-    assert cli.detection_key(cli.apply_variant(CFG, "V0b")) == cli.detection_key(cli.apply_variant(CFG, "V1b"))
-    assert cli.events_file_name(cli.apply_variant(CFG, "V1b"), CFG).startswith("events_")
+    assert (cli.detection_key(cli.apply_variant(CFG, "V0-preU19"))
+            == cli.detection_key(cli.apply_variant(CFG, "V1-preU19")))
+    assert cli.events_file_name(cli.apply_variant(CFG, "V1-preU19"), CFG).startswith("events_")
 
 
 def test_variant_fits_detects_under_each_variants_own_config(tmp_path, monkeypatch):
@@ -121,10 +123,9 @@ def test_variant_fits_detects_under_each_variants_own_config(tmp_path, monkeypat
 
     monkeypatch.setattr(cli, "run_events", fake_run_events)
     cache = {}
-    for v in ("V1", "V0", "V1b", "V0b"):
+    for v in ("V1", "V0", "V1-preU19", "V0-preU19"):
         cli.variant_fits(cache, cli.apply_variant(CFG, v), CFG, [0.0], 8000, tmp_path)
-    base_lw = (CFG.get("detect") or {}).get("long_window_s")
-    assert seen == [base_lw, 3.0]                              # once for V1 / V0, once for V1b / V0b
+    assert seen == [3.0, None]                                 # once for V1 / V0, once for the pre-U19 pair
     assert all((tmp_path / name).exists() for name in cache)
     assert "events.parquet" in cache and len(cache) == 2
 
@@ -141,8 +142,8 @@ def test_summary_reads_each_variants_own_events_file(tmp_path):
                                                             {"t_cpa_received_rel_s": 45.0}]}))
     export.write_parquet(pd.DataFrame({"t_cpa_received_rel_s": [14.8]}), keep / "events.parquet")
     export.write_parquet(pd.DataFrame({"t_cpa_received_rel_s": [14.8, 45.3]}),
-                         keep / cli.events_file_name(cli.apply_variant(CFG, "V1b"), CFG))
-    rows = [{"scenario": "C", "config": "all", "seed": 3, "variant": "V1"},     # e.g. timeout rows: no counts
-            {"scenario": "C", "config": "all", "seed": 3, "variant": "V1b"}]
+                         keep / cli.events_file_name(cli.apply_variant(CFG, "V1-preU19"), CFG))
+    rows = [{"scenario": "C", "config": "all", "seed": 3, "variant": "V1-preU19"},   # e.g. timeout rows: no counts
+            {"scenario": "C", "config": "all", "seed": 3, "variant": "V1"}]
     assert cli._fill_detection(rows, tmp_path, ev.EvalParams(), CFG) == (2, 0)
-    assert rows[0]["truth_events_detected"] == 1 and rows[1]["truth_events_detected"] == 2
+    assert rows[0]["truth_events_detected"] == 2 and rows[1]["truth_events_detected"] == 1

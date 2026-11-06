@@ -72,7 +72,7 @@ threshold are untouched: the arms only add rows to the max-over-rows statistic.
 |---|---|---|---|---|---|
 | `detect.harmonic_stat` | true (arm a) | plan §8.2 | mode | — | `detect.detect_events_audio` |
 | `detect.harmonic_n` | 3 | as `ridge.hough_harmonics` (the seeding matched filter's harmonic count) | PROVISIONAL | 2, 3, 5 | `detect.harmonic_statistic` |
-| `detect.long_window_s` | 3.0 (arm b) | plan §8.2 "2–4 s" (the doppler.txt resolution step); midpoint | PROVISIONAL | 2, 3, 4 | `detect.detect_events_audio` |
+| `detect.long_window_s` | 3.0 (arm b; **default since U19**, session 8) | plan §8.2 "2–4 s" (the doppler.txt resolution step); midpoint | PROVISIONAL until milestone 4.5: re-check on field recordings, above all spurious events from stationary lines (hum) and wind | 2, 3, 4 | `detect.detect_events_audio` |
 | `detect.low_band_hz` | [20, 100] (arm c) | upper edge: the recording high-pass corner (`realism` scene, 100 Hz); lower edge: the conventional lower limit of audio | PROVISIONAL | lower edge 20, 30, 40 | `detect.DetectParams.prop_bands` |
 
 Implementation choices (no knob):
