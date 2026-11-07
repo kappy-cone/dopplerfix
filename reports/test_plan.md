@@ -9,7 +9,7 @@ rules), docs/adr/0004–0006.
 
 | Layer | What | Count | Time | When |
 |---|---|---|---|---|
-| Unit / component | physics, geo, tracks, cascade stages, scoring pieces, config coverage, CI shard, experiment imports | 250 | 54 s on 4 workers (85 s serial with coverage); CI about 30 s over 6 shards | every push (gate) |
+| Unit / component | physics, geo, tracks, cascade stages, scoring pieces, config coverage, CI shard, experiment imports | 266 (250 when this plan was written) | 54 s on 4 workers (85 s serial with coverage); CI about 30 s over 6 shards | every push (gate) |
 | Integration (`heavy`) | true cell ranks 1st ×4, the frozen scoring oracle, the null-test ranking | 6 | 0.5–4 min each | after merge |
 | End to end (`slow`) | locate contract, events seam, synth → fit recovery (11 seeds), scenario/decoy checks, ablate smoke, the Wilks Monte Carlo, the correlated-noise xfail | 27 | 10 min 45 s locally on 4 workers; about 14 min on CI | after merge |
 | System | ablation / decision runs against reference rows (Stage A2) | – | 50–90 min | by hand, on the compute machine |
@@ -26,7 +26,7 @@ Three structural problems sit on top of it:
 
 | | Candidate | Status | Here |
 |---|---|---|---|
-| A | Deepen locked scoring | **Done in part:** #15 batched refinement. The per-cell cost table is ADR-0006 (accepted, not started) | Not repeated; T6 adds its test |
+| A | Deepen locked scoring | **Done in part:** #15 batched refinement. The per-cell cost table is ADR-0006 (proposed, not started) | Not repeated; T6 adds its test |
 | B | Scenario world first, audio on demand | Not started | T5 |
 | C | One test-side stage store | Not started | T3 |
 | D | Stage keys for ablation units | Not started; changes what a timeout measures, so only with a new reference | Out of scope (production, not tests) |
@@ -74,7 +74,14 @@ locate tests. A coverage target of 100 % there would mostly test matplotlib.
   `none`. Rebuild them from their seeds and compare with `reports/data/stageA2_rows.jsonl.gz`:
   - **discrete fields exactly:** status, outcome, n_events, survivors per stage, rank1 assignment,
     true_cell_rank, n_hypotheses_scored;
-  - **floats** to rel 1e-6. CONTEXT.md notes 7th-digit differences across machines, so not bit-exact in CI.
+  - **floats** exactly where the geoid grids (`data/proj/`) are installed, as on the compute machine that
+    made the rows; rel 1e-6 elsewhere (CI), since CONTEXT.md puts the 7th-digit differences across machines
+    down to the grids. The test reports which mode it ran in.
+  - **never compared:** provenance and run-time fields (`git`, `config_sha256`, `detection_sha256`,
+    `seconds`, `timings_s`, disk footprint). #17 and #18 moved both hashes with results unchanged, so a hash
+    check would fail without any result change.
+  - **"clear margins"** also means far from the 900 s ablation cap: pick units that finish in well under a
+    minute in the A2 rows, so a slow runner cannot turn one into a timeout.
 - **Type.** System-level regression, `heavy`, about 1–2 min.
 - **Why.** ADR-0005 (five refactor PRs) and ADR-0006 each promise "identical results". Today each PR would
   rebuild units by hand. This makes the promise checked on every merge, and it catches accidental
@@ -138,11 +145,11 @@ locate tests. A coverage target of 100 % there would mostly test matplotlib.
 - **Every "identical results" PR:** T2 green, plus the PR's own oracle test (T6 pattern).
 
 ## 6. Order alongside the ADRs
-T1 → T2 (before ADR-0005's first PR, so the refactor is checked by CI) → T7 quick fixes → T3 → T4 → T6 (with
+T1 → T2 (before ADR-0005's first PR and before ADR-0006, since both promise identical results) → T7 quick fixes → T3 → T4 → T6 (with
 ADR-0006) → T5.
 
 ## 7. Brief for the implementing session (compute machine)
-Paste into the session on the compute machine, run from the repo root, once #18 and #19 are merged:
+Paste into the session on the compute machine, run from the repo root, now that #18 and #19 are merged:
 
 ```
 Pull first (git pull --rebase on main). Read CLAUDE.md, CONTRIBUTING.md §4, §4.1 and §7, CONTEXT.md, and
@@ -154,8 +161,10 @@ Implement reports/test_plan.md T1, then T2, one branch and one PR each, then STO
   σ). Add a jet-like pass and a classify.decide table test. Keep it under about 5 s; check the gate time.
 - T2: a heavy golden-row test. Pick 3 Stage A2 units with clear margins (one V1 unique correct, one ambiguous,
   one V0 none); say why each was chosen. Rebuild from their seeds, compare with
-  reports/data/stageA2_rows.jsonl.gz: discrete fields exactly, floats rel 1e-6. On this machine (where the
-  rows were made) also confirm they match bit for bit, and record that in the PR. The docstring says the
+  reports/data/stageA2_rows.jsonl.gz: discrete fields exactly; floats exactly where data/proj/ has the geoid
+  grids, rel 1e-6 elsewhere; never the provenance / run-time fields (git, config_sha256, detection_sha256,
+  seconds, timings_s). Units well under a minute in the A2 rows. On this machine (where the rows were made)
+  confirm the exact mode passes, and record that in the PR. The docstring says the
   units are refreshed in the same PR as any new reference run.
 Rules
 - Test-code PRs: no change to config.yaml or to any result. Don't move provisional values.
