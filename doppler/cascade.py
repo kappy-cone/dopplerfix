@@ -332,7 +332,7 @@ def _runs(keys: tuple[NDArray, ...], sample: NDArray) -> NDArray:
     return np.cumsum(brk) - 1
 
 
-def _refine_cpa(P: NDArray, ts: TrackSet, k: NDArray, s: NDArray) -> tuple[NDArray, NDArray, NDArray, NDArray]:
+def refine_cpa(P: NDArray, ts: TrackSet, k: NDArray, s: NDArray) -> tuple[NDArray, NDArray, NDArray, NDArray]:
     """Closest approach of points P to track k's linear-interpolated polyline around sample s (s−1..s+1).
 
     Returns (t_emit, r, pos, vel). Linear interpolation matches TrackSet.sample.
@@ -386,7 +386,7 @@ def cpa_prefilter(tile: GridTile, events: Sequence[ObservedEvent], indexes: Sequ
         o2 = np.lexsort((dist, run))           # first row of each run = its minimum
         first = o2[np.r_[True, np.diff(run[o2]) != 0]]
         cell, trk, smp = cell[first], trk[first], smp[first]
-        t_emit, r, pos, vel = _refine_cpa(tile.xyz[cell], ts, trk, smp)
+        t_emit, r, pos, vel = refine_cpa(tile.xyz[cell], ts, trk, smp)
         speed = np.linalg.norm(vel, axis=1)
         t_rx = t_emit + r / c
         dtc = t_rx - prior.start_s - ev.t_rx_s

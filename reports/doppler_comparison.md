@@ -2,7 +2,8 @@
 
 Session 4, analysis only. Nothing in code, config or CLAUDE.md was changed. The source is
 `doppler.txt`, an auto-caption transcript (839 lines) of a video where someone builds a similar
-tool. Line numbers are cited as `L123`. The transcript only has the narration. Anything that was
+tool. Line numbers are cited as `L123`. The transcript is third-party content, so it is no longer committed.
+Keep a local copy at `data/doppler.txt` (gitignored); the line numbers refer to that file. The transcript only has the narration. Anything that was
 only on screen (the silence thresholds, the type lookup table, their equations, their code) is
 missing, so "not mentioned" below means "not in the narration", not necessarily "not done".
 
@@ -56,7 +57,7 @@ by hand (L675–681); (6) phone noise suppression gates the curve (L802–807).
 | Flight-data ingest | whole-day CONUS scrape, no cleaning described | `tracks.py:normalize_frame` (OpenSky `lastposupdate`), `clean_track`, `interpolate_track` (PCHIP in ECEF), `build_trackset` | cleaning **missing on theirs**; OpenSky bulk ingest **missing on ours** (milestone 7) |
 | Altitude datum | "above sea level" + DEM | `geo.GeoidModel` (GEOID18/EGM96), geometric preferred, `cascade.baro_alt_tol_m` | **different**, ours correct |
 | Grid and reach pruning | 200 m points ≤ 10 km from flights | `geo.build_tile`, `cascade.iter_cascade` (tiles out of reach skipped) | **same** idea |
-| CPA and delayed CPA | per point per flight | `cascade.py:cpa_prefilter` + `_refine_cpa` (`t_rx_pred = t_emit + r/c`) | **same** |
+| CPA and delayed CPA | per point per flight | `cascade.py:cpa_prefilter` + `refine_cpa` (`t_rx_pred = t_emit + r/c`) | **same** |
 | Speed and distance filter | segments by v range, points at d range | `cascade.build_event_index` (KD-tree, radius d+tol, event time window) + `cpa_prefilter` (z_v, z_d) | **same** structure; tolerances **different** (eyeballed vs covariance ⊕ sys) |
 | Offset filter | 920 s ± wiggle, 2 events | `cascade.py:offset_filter` (∩ events ∪ passes, shared Δt, N events) | **same** for N = 2; ours general |
 | Time prior | date only (24 h); known-to-minute for the demo | `cascade.dt_prior_from` (known / window / relative) | **same** capability; our benchmark is known-time only |

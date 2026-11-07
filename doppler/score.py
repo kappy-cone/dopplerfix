@@ -19,7 +19,7 @@ from typing import Sequence
 import numpy as np
 from numpy.typing import NDArray
 
-from .cascade import Hypothesis, ObservedEvent
+from .cascade import Hypothesis, ObservedEvent, refine_cpa
 from .tracks import TrackSet
 
 
@@ -467,13 +467,11 @@ def cpa_geometry(xyz: NDArray, track: int, ts: TrackSet, t_near_s: float | None 
 
     With ``t_near_s`` only samples within ±search_s of it are considered (a track can pass twice).
     """
-    from .cascade import _refine_cpa
-
     d = np.linalg.norm(ts.xyz[track] - xyz, axis=1)
     if t_near_s is not None:
         d = np.where(np.abs(ts.t_s - t_near_s) <= search_s, d, np.nan)
     s0 = int(np.nanargmin(d))
-    t_emit, r, pos, vel = _refine_cpa(np.asarray(xyz, float)[None], ts, np.array([track]), np.array([s0]))
+    t_emit, r, pos, vel = refine_cpa(np.asarray(xyz, float)[None], ts, np.array([track]), np.array([s0]))
     return {"t_emit_s": float(t_emit[0]), "r_m": float(r[0]), "speed_mps": float(np.linalg.norm(vel[0])),
             "pos": pos[0]}
 

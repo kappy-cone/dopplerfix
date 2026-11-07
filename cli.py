@@ -62,6 +62,16 @@ def section(cfg: dict, name: str) -> dict:
     return dict(cfg.get(name) or {})
 
 
+def need(cfg: dict, name: str, key: str):
+    """A value config.yaml must supply: no fallback in code, so a renamed or deleted key fails loudly
+    instead of silently using a value that config_provenance never sees (tests/test_config.py checks every
+    call site against config.yaml)."""
+    try:
+        return cfg[name][key]
+    except (KeyError, TypeError):
+        raise KeyError(f"config.yaml [{name}] is missing {key!r}") from None
+
+
 def event_params(cfg: dict) -> dict:
     """All per-event processing parameter objects from config."""
     rp = section(cfg, "ridge")
@@ -126,7 +136,7 @@ def setup_geoid(cfg: dict) -> GeoidModel:
     d = g.get("grid_dir")
     if d and Path(d).is_dir():
         pyproj.datadir.append_data_dir(str(Path(d).resolve()))
-    return GeoidModel(g.get("grids") or [], section(cfg, "dem").get("geoid_undulation_m", 0.0))
+    return GeoidModel(g.get("grids") or [], need(cfg, "dem", "geoid_undulation_m"))
 
 
 class RasterDEMSource:
@@ -159,7 +169,7 @@ def load_dem_source(cfg: dict, geoid: GeoidModel):
     """Flat ellipsoidal DEM (synthetic scenarios), or windowed reads of the configured raster/VRT."""
     d = section(cfg, "dem")
     if not d.get("path"):
-        return FlatDEM(section(cfg, "region").get("ground_elev_m", 0.0))
+        return FlatDEM(need(cfg, "region", "ground_elev_m"))
     return RasterDEMSource(d["path"], geoid)
 
 
@@ -259,7 +269,7 @@ def cascade_inputs(cfg: dict, fits, prepared: list[tracks.Track], tprior, durati
     from doppler import cascade, geo
 
     cp = cascade_params(cfg)
-    clock = float(section(cfg, "time_prior").get("clock_tol_s", 10.0))
+    clock = float(need(cfg, "time_prior", "clock_tol_s"))
     span = (min(t.t_s[0] for t in prepared), max(t.t_s[-1] for t in prepared)) if prepared else None
     prior = cascade.dt_prior_from(tprior.mode, tprior.start_s, tprior.window_s, clock, duration_s, span)
     events = cascade.observed_events(fits, c)
@@ -267,11 +277,10 @@ def cascade_inputs(cfg: dict, fits, prepared: list[tracks.Track], tprior, durati
     pad = 60.0
     t_lo = prior.start_s + prior.dt_lo_s - reach / c - pad
     t_hi = prior.start_s + prior.dt_hi_s + duration_s + pad
-    dt = section(cfg, "tracks").get("resample_s", 0.25)
+    dt = need(cfg, "tracks", "resample_s")
     ts = tracks.build_trackset(prepared, t_lo, t_hi, dt)
-    g = section(cfg, "grid")
-    mode = section(cfg, "search").get("mode", "regional")
-    spec = geo.make_grid_spec(region_lonlat, g.get("spacing_m", 200), cp.tile_cells, mode, g.get("crs", "auto"))
+    mode = need(cfg, "search", "mode")
+    spec = geo.make_grid_spec(region_lonlat, need(cfg, "grid", "spacing_m"), cp.tile_cells, mode, need(cfg, "grid", "crs"))
     return events, prior, ts, spec, cp
 
 
@@ -346,7 +355,7 @@ def build_synth_scenario(cfg: dict, region, params: synth.SynthParams, rp, n_dec
     frame0, _ = region_frame(region)
     tp = audio.parse_time_prior(cfg.get("time_prior") or {})
     c = speed_of_sound_from(cfg)
-    ground = section(cfg, "region").get("ground_elev_m", 0.0)
+    ground = need(cfg, "region", "ground_elev_m")
     frame = LocalFrame(frame0.lat0, frame0.lon0, ground)
     sc = synth.make_scenario(params, frame, tp.start_s, ground, c, realism=rp)
     targets, n_cands = [], 0
@@ -379,7 +388,7 @@ def cmd_synth(args) -> int:
         print("synth needs time_prior.mode: known with start_utc (the scenario's true start)", file=sys.stderr)
         return 2
     c = speed_of_sound_from(cfg)
-    ground = section(cfg, "region").get("ground_elev_m", 0.0)
+    ground = need(cfg, "region", "ground_elev_m")
     frame = LocalFrame(frame0.lat0, frame0.lon0, ground)
     from doppler import realism as rl
 
@@ -493,7 +502,7 @@ def cmd_regions(args) -> int:
     import pyogrio
 
     cfg = load_config(args.config)
-    path = Path(args.path or section(cfg, "region").get("regions_path", "inputs/search_regions.gpkg"))
+    path = Path(args.path or need(cfg, "region", "regions_path"))
     gdf = pyogrio.read_dataframe(path, layer=REGION_LAYER) if path.exists() else \
         gpd.GeoDataFrame({"name": []}, geometry=[], crs="EPSG:4326")
     if args.action == "add":
@@ -701,8 +710,8 @@ def run_locate(cfg: dict, inp: LocateInputs, *, fits=None, audio_data=None, sink
     dem_source = load_dem_source(cfg, geoid)
     region_name, region = load_region(cfg, inp.region)
     c = speed_of_sound_from(cfg)
-    mic_h = float(section(cfg, "mic").get("height_agl_m", 1.5))
-    mode = section(cfg, "search").get("mode", "regional")
+    mic_h = float(need(cfg, "mic", "height_agl_m"))
+    mode = need(cfg, "search", "mode")
 
     # Audio -> events
     t = _time.perf_counter()
@@ -727,7 +736,7 @@ def run_locate(cfg: dict, inp: LocateInputs, *, fits=None, audio_data=None, sink
 
     # Tracks (cropped to the window the cascade can use)
     t = _time.perf_counter()
-    clock = float(section(cfg, "time_prior").get("clock_tol_s", 10.0))
+    clock = float(need(cfg, "time_prior", "clock_tol_s"))
     if tprior.mode == "known":
         win = (tprior.start_s - clock - 120.0, tprior.start_s + clock + duration + 60.0)
     elif tprior.mode == "window":
@@ -739,7 +748,7 @@ def run_locate(cfg: dict, inp: LocateInputs, *, fits=None, audio_data=None, sink
     timings["tracks_s"] = _time.perf_counter() - t
 
     write_grid = inp.write_grid if inp.write_grid is not None else \
-        {"auto": mode == "regional", True: True, False: False}.get(section(cfg, "outputs").get("write_grid", "auto"),
+        {"auto": mode == "regional", True: True, False: False}.get(need(cfg, "outputs", "write_grid"),
                                                                      mode == "regional")
     run_dir, buf = sink_factory() if sink_factory is not None else (None, _NullSink())
     run_id = run_dir.name if run_dir is not None else None
@@ -1173,7 +1182,7 @@ def write_outputs(res: LocateResult, args, T0: float, extra: dict | None = None)
         run_dir / "score.tif", np.array([d["i"] for d in surv], np.int64), np.array([d["j"] for d in surv], np.int64),
         np.array([d["score"] for d in surv], np.float32), spec.spacing_m, spec.crs,
         "Locked N-event score: pooled mean Huber loss of ridge residuals in ridge-scatter units (lower is better)",
-        int(oc.get("max_raster_cells", 50_000_000)))
+        int(need(cfg, "outputs", "max_raster_cells")))
     timings["export_s"] = _time.perf_counter() - t
 
     # Plots
@@ -1182,14 +1191,14 @@ def write_outputs(res: LocateResult, args, T0: float, extra: dict | None = None)
     plots = {}
     if not args.no_plots:
         plot.plot_funnel(counts, run_dir / "funnel.png", f"Cascade survivors — {run_id}")
-        ncand = int(vc.get("max_candidates", 20))
+        ncand = int(need(cfg, "viewer", "max_candidates"))
         cands = []
         for d in surv[:ncand]:
             cands.append(plot.candidate_view(d, events, ts, prior, c, spec))
         fmax = min(3900.0, max(300.0, 1.2 * max(float(e.ridge_f_hz.max()) for e in events)))
-        disp = audio.display_spectrogram(x, fs, fmax, int(vc.get("max_time_px", 1500)), int(vc.get("max_freq_px", 400)))
+        disp = audio.display_spectrogram(x, fs, fmax, int(need(cfg, "viewer", "max_time_px")), int(need(cfg, "viewer", "max_freq_px")))
         plot.plot_candidates_spectrogram(disp, events, cands, run_dir / "spectrogram_top.png",
-                                         int(oc.get("top_plot", 3)),
+                                         int(need(cfg, "outputs", "top_plot")),
                                          [e["t_cpa_received_rel_s"] for e in truth["events"]] if truth else None)
         plot.plot_score_histogram({"candidates (silence survivors)": np.array([d["score"] for d in surv])},
                                   run_dir / "score_hist.png", "locked N-event score (lower is better)",
@@ -1198,8 +1207,8 @@ def write_outputs(res: LocateResult, args, T0: float, extra: dict | None = None)
         plotly_js = root / "plotly.min.js"
         plot.write_viewer(run_dir / "viewer.html", run_id, x, fs, prior.start_s, events, fits, cands,
                           "../plotly.min.js", vc, sp, c,
-                          plot.map_layers(surv, ts, ncand, int(vc.get("map_max_cells", 20000)), 2.0,
-                                          str(vc.get("map_style", "open-street-map"))))
+                          plot.map_layers(surv, ts, ncand, int(need(cfg, "viewer", "map_max_cells")), 2.0,
+                                          str(need(cfg, "viewer", "map_style"))))
         if not plotly_js.exists():
             print(f"warning: {plotly_js} missing; viewer.html needs it (pinned plotly.js {vc.get('plotly_version')})",
                   file=sys.stderr)
@@ -1288,7 +1297,7 @@ def cmd_locate(args) -> int:
     if inp is None:
         print("locate needs --scenario, or --audio and --tracks", file=sys.stderr)
         return 2
-    root = Path(section(cfg, "outputs").get("root", "outputs"))
+    root = Path(need(cfg, "outputs", "root"))
 
     def sink():
         run_dir = export.new_run_dir(root, args.run_id, tag=inp.tag)
@@ -1343,7 +1352,7 @@ def run_null_tests(res: LocateResult, fracs) -> dict:
 
     cfg = res.cfg
     dem_source = load_dem_source(cfg, res.geoid)
-    mic_h = float(section(cfg, "mic").get("height_agl_m", 1.5))
+    mic_h = float(need(cfg, "mic", "height_agl_m"))
     cp = cascade_params(cfg)
     D = float(res.duration)
     shifted, extra = [], []
@@ -1583,7 +1592,7 @@ def _ablate_worker(unit: dict, q) -> None:
         sp = dict(cfg.get("synth") or {})
         sp.update(seed=unit["seed"], duration_s=dur, event_rx_times_s=list(times), event_classes=None,
                   audible_slant_m=section(cfg, "cascade").get("audible_slant_m"), region_radius_m=radius)
-        sp.setdefault("mic_height_m", section(cfg, "mic").get("height_agl_m", 1.5))
+        sp.setdefault("mic_height_m", need(cfg, "mic", "height_agl_m"))
         params = synth.SynthParams.from_dict(sp)
         rp = realism_for(cfg, unit["config"])
         sc, _, _ = build_synth_scenario(cfg, region, params, rp, params.n_cascade_decoys)
@@ -1913,8 +1922,8 @@ def cmd_clean(args) -> int:
     from doppler import export
 
     cfg = load_config(args.config)
-    root = Path(section(cfg, "outputs").get("root", "outputs"))
-    keep = args.keep if args.keep is not None else int(section(cfg, "outputs").get("keep_runs", 5))
+    root = Path(need(cfg, "outputs", "root"))
+    keep = args.keep if args.keep is not None else int(need(cfg, "outputs", "keep_runs"))
     if not root.exists():
         print(f"{root} does not exist")
         return 0

@@ -281,7 +281,9 @@ def write_viewer(path: Path, run_id: str, x, fs: float, start_s: float, events, 
 
     from .score import ScoreParams, huber, prepare_ridges
 
-    vc = viewer_cfg or {}
+    # Without a config (tests, ad-hoc use) the display defaults apply; a given config must supply the keys,
+    # so a renamed key in config.yaml fails loudly instead of silently using these.
+    vc = viewer_cfg if viewer_cfg is not None else {"event_time_px": 1000, "event_freq_px": 300}
     sp = score_params or ScoreParams()
     ridges = prepare_ridges(events, sp)
     dur = len(x) / fs
@@ -290,8 +292,8 @@ def write_viewer(path: Path, run_id: str, x, fs: float, start_s: float, events, 
         t_lo, t_hi = max(0.0, float(ev.ridge_t_s.min()) - 20), min(dur, float(ev.ridge_t_s.max()) + 20)
         f_lo, f_hi = 0.85 * float(ev.ridge_f_hz.min()), 1.15 * float(ev.ridge_f_hz.max())
         t, f, z8, floor_db = event_window_spectrogram(x, fs, t_lo, t_hi, f_lo, f_hi,
-                                                      int(vc.get("event_time_px", 1000)),
-                                                      int(vc.get("event_freq_px", 300)))
+                                                      int(vc["event_time_px"]),
+                                                      int(vc["event_freq_px"]))
         sg = ft.sigma
         evs.append({
             "idx": e, "cls": ["prop", "jet", "unknown"][ev.cls],

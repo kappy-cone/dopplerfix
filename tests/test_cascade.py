@@ -234,7 +234,7 @@ def test_cpa_refinement_finds_closest_point_between_samples():
     ts = tracks.build_trackset([tr], START, START + 60, 0.25)
     P = FRAME.enu_to_ecef(np.array([0.0, 500.0, 1600.0]))[None]
     s = np.array([int(np.nanargmin(np.linalg.norm(ts.xyz[0] - P, axis=1)))])
-    t_emit, r, pos, vel = cs._refine_cpa(P, ts, np.array([0]), s)
+    t_emit, r, pos, vel = cs.refine_cpa(P, ts, np.array([0]), s)
     assert t_emit[0] - START == pytest.approx(30.1, abs=1e-3)
     assert r[0] == pytest.approx(np.hypot(500.0, 400.0), abs=0.5)  # ENU up vs ellipsoid curvature: < 1 m
     assert np.linalg.norm(vel[0]) == pytest.approx(100.0, rel=1e-6)

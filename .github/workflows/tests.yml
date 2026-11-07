@@ -9,9 +9,8 @@ on:
   push:
     paths-ignore:                      # skip runs when every changed file is documentation
       - "**/*.md"
-      - "reports/**"                   # reports and experiment scripts; no test imports them
+      - "reports/**"                   # reports and experiment scripts (tests/test_experiments_import.py parses the scripts)
       - "docs/**"
-      - "doppler.txt"
   workflow_dispatch:
 permissions:
   contents: read
