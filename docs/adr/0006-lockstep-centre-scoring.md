@@ -1,8 +1,8 @@
 # ADR-0006: Centre scoring in lockstep per cell, grouped by (event, track), with identical results
 
-**Status:** Accepted (2026-11-06)
+**Status:** Proposed (2026-11-06; awaiting the project owner's decision)
 **Date:** 2026-11-06
-**Deciders:** project owner
+**Deciders:** project owner (not yet decided)
 **Audit item:** 4 (CONTEXT.md, "Options already identified but not done")
 
 ## Context
@@ -41,8 +41,7 @@ Score each cell's hypotheses **in lockstep**:
   match it field for field.
 
 Expected effect: calls per Brent step fall from (hypotheses × events) to (distinct tracks per event × events).
-This is an estimate, to be confirmed by re-profiling the four session-5 units (all-on 11, 23, 18 and
-loo:source 6) before and after.
+This is an estimate, to be confirmed by re-profiling before and after (action item 1 lists the units).
 
 ## Options considered
 
@@ -89,11 +88,14 @@ split, `cli.py`) or ADR-0004 (no TrackSet layout change).
   exception in cross-checks). Rerun a reference only if you want timeouts on the new code.
 
 ## Action items
-1. [ ] Re-profile the four session-5 units on current main: the baseline, plus hypotheses per cell and
-   distinct tracks per event.
+1. [ ] Re-profile on current main: the four session-5 units (all-on 11, 23, 18, loo:source 6) and the V1
+   units that time out in Stage A2 (loo:geometry 18, sub:cwind 11, sub:mic_height 18; all-on 11 and 23 no
+   longer time out there). The baseline, plus hypotheses per cell and distinct tracks per event.
+   Profile with nothing else running (CONTEXT.md rule 3).
 2. [ ] `score._bounded_brent` generator; test that its probes equal scipy's on 200 random bounded problems.
 3. [ ] `score.score_cell_lockstep` (coarse grid → Brent steps → final), used by `rank_cells` behind no flag
    (identical results).
 4. [ ] Oracle test: every `CellScore` field identical to `score_hypothesis` on the cascade survivors of a
    clean scenario and of one all-on unit; 10 rebuilt Stage A2 units identical except timing and provenance.
+   The golden-row test (reports/test_plan.md T2) must be in the gate's after-merge job first, and green here.
 5. [ ] Re-profile; report the speed-up per unit in the PR.

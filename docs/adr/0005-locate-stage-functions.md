@@ -1,8 +1,8 @@
 # ADR-0005: Split `run_locate` into pure stage functions in `doppler/pipeline.py`
 
-**Status:** Accepted (2026-11-06)
+**Status:** Proposed (2026-11-06; awaiting the project owner's decision)
 **Date:** 2026-11-06
-**Deciders:** project owner
+**Deciders:** project owner (not yet decided)
 **Audit item:** 3
 
 ## Context
