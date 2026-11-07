@@ -86,6 +86,55 @@ Implementation choices (no knob):
 - **Arm c.** The low band is one more row of the main spectrogram's tonal statistic, so it gets its own
   (smaller-N) noise baseline. The ridge search band (`detect.band_hz`) is unchanged.
 
+## U19 task 4: arm h, the seed-to-ridge hand-off (session 8; before the hand-off screen)
+
+Registered before the first measurement of the arm. The diagnostic that motivates it (`reports/u19.md`, "Task 4,
+step 1") measured no arm. Approved by the user (session 8). Off by default, so V0 / V1 are unchanged. Both knobs
+are modes; neither adds a number. `ridge.guide_hz`, `ridge.weak_db`, `ridge.min_points` and every other threshold
+are untouched.
+
+| Knob (config key) | Value when on | Source | Status | Sensitivity grid | Used by |
+|---|---|---|---|---|---|
+| `ridge.handoff_harmonics` | true (arms h1, h12) | step-1 diagnostic: on short guided ridges whose seed is on a missed event's line, the seed line holds a median 11 strong columns and its 2nd / 3rd harmonics 258 / 120. Harmonics tried: m = 2 … `ridge.hough_harmonics` (3), those the seed statistic already sums | mode | — | `fit.characterize_window` |
+| `ridge.handoff_continue` | true (arms h2, h12), prop band only (`ridge_jet: false`) | step-1 diagnostic: 16 missed events lost to the `break` after a seed on another line. The peel stays bounded by `max_ridges + 2` attempts | mode | — | `fit.characterize_window` |
+
+Implementation choices (no knob):
+- **h1.** On a short guided ridge, `guided_ridge` runs around m × the seed curve for each m. The ridge with the
+  most points is kept, ties going to the lower m. The fit, the guided passes, the descent check and the masking
+  (the fitted curve's family and the seed curve's family) are the same as for a ridge on the seed line. The jet
+  band has `hough_harmonics: 1`, so h1 cannot act there.
+- **h2.** When no ridge results, the seed curve's harmonic family is masked (±`mask_halfwidth_hz`) and the peel
+  continues with the next seed, instead of leaving the window.
+- **Screen** (rules arms out only): h1, h2 and h12 against the current default (arm b on), six configs (clean,
+  all-on, loo:path, loo:levels, loo:scene, sub:reflection), seeds 0–49, paired by audio.
+  - Measures: recall, spurious events per run, extra fits within `evaluate.match_tol_s` of a truth CPA, the
+    matched fits' |Δv| / v and |Δd| / d, and detection time.
+  - Paired exact sign test on truth events per config.
+
+### Arm h1g: the hand-off plausibility guard (session 8; registered before its first measurement)
+
+The arm h screen (`reports/u19.md`, "Task 4, step 2") left h1 not ruled out on recall (pooled 49 gained / 0
+lost) but ruled out as built on spurious fits (pooled 129 → 250, all-on 21 → 68). About a third of the extra
+all-on spurious fits were physically implausible. Approved by the user (session 8, option 1). Off by default.
+
+| Knob (config key) | Value when on | Source | Status | Sensitivity grid | Used by |
+|---|---|---|---|---|---|
+| `ridge.handoff_guard` | true (arm h1g = `handoff_harmonics` + `handoff_guard`) | the arm h screen's spurious breakdown. The guard reuses existing values only: the fit's received CPA inside the detection window, `v` inside `ridge.hough_v_range_mps` (35–260 m/s), `d / v` inside `ridge.hough_tau_range_s` (2–80 s), the ranges the Hough seed already searches | mode | — | `fit.characterize_window` (`fit.handoff_plausible`) |
+
+Implementation choices (no knob): the guard acts only on fits whose ridge came from the h1 hand-off, after the
+fit and its guided passes. A rejected hand-off fit is treated as no hand-off (the peel leaves the window, as in
+the base). No fit on the seed line itself is checked, so with h1 off the guard changes nothing.
+
+Screens (rule arms out only; neither is a decision run):
+1. **Detection**, exactly as the arm h screen: base, h1, h1g; six configs × seeds 0–49, paired by audio
+   (`handoff_screen.py`). h1g is ruled out if it keeps fewer than half of h1's pooled gained events, or if its
+   pooled spurious count is not below h1's.
+2. **End to end**, V1 with h1g (variant `V1h1g`) on all-on C seeds 0–49 (`cli.py ablate --plan stageA --limit 50`),
+   paired against the Stage A2 V1 rows on the same units. Measures: rank-1 accuracy (exact sign test), recall,
+   spurious events, rank-1 error and true-cell rank (Wilcoxon), timeouts. h1g is ruled out if rank-1 runs lost
+   exceed runs gained. Not ruled out is not acceptance: a default change needs its own pre-registered decision
+   run.
+
 ## Later phases
 
 These entries are listed in plan P0.7 and are added to config.yaml only when their item is built:

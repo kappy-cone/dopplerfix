@@ -87,6 +87,10 @@ ridge:                       # prop band, main spectrogram
   floor_mode: freq
   floor_halfwidth_hz: 20.0
   seed_mode: hough           # hough (Doppler matched filter; robust to crossing ridges) | dp
+  # U19 task 4 arm h (reports/apriori_registry.md; off by default): on a short guided ridge around the Hough seed,
+  handoff_harmonics: false   # (h1) try the seed's harmonics m = 2 .. hough_harmonics, keep the longest ridge
+  handoff_continue: false    # (h2) if none, mask the seed's family and continue the peel instead of leaving the window
+  handoff_guard: false       # (h1g) keep a hand-off fit only if its CPA is in the window and v, d / v are in the Hough ranges
   hough_dlogf: 0.008
   hough_dt_s: 0.5
   hough_cap_db: 25.0
@@ -108,6 +112,7 @@ ridge_jet:                   # jet band, jet spectrogram (keys not given fall ba
   guide_hz: 8.0
   mask_halfwidth_hz: 10.0
   hough_harmonics: 1
+  handoff_continue: false    # arm h2 acts on the prop band only (the step-1 evidence)
 
 fit:
   v_bounds_mps: [10, 320]
@@ -219,6 +224,9 @@ variants:
   V0-preU19:
     cascade: {max_unmatched_events: 0, silence_audibility: hard, weak_event_rel_sigma: null}
     detect: {long_window_s: null}
+  # U19 task 4 screen arm (never a default; apriori_registry "Arm h1g"): V1 with the guarded harmonic hand-off
+  V1h1g:
+    ridge: {handoff_harmonics: true, handoff_guard: true}
 
 score:                       # locked N-event scoring: one shared Δt, one f0 per event
   dt_coarse_step_s: 0.5      # coarse Δt grid over each hypothesis' feasible interval, then bounded refinement
@@ -267,6 +275,8 @@ viewer:
   plotly_sha256: 6d21266ce1bd7d9e5ab4e115989c70c20de0382fd973a8f26ab58619eba4d603
   max_time_px: 1500          # display-only downsampling of the spectrogram
   max_freq_px: 400
+  event_time_px: 1000         # per-event spectrogram window in the viewer (display only)
+  event_freq_px: 300
   max_candidates: 20
   map_style: open-street-map # Map tab basemap (plotly scattermap style); tiles need a network connection
   map_max_cells: 20000       # scored cells drawn on the Map tab (best first; display only)

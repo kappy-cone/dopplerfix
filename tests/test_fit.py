@@ -109,3 +109,85 @@ def test_dedupe_same_aircraft_half_order_and_speed_gate():
     out = dedupe_same_aircraft([a, b, c, d], cp)
     assert a in out and b not in out and c in out and d in out
     assert _simple_ratio(1.5, 0.03) and _simple_ratio(2.0, 0.03) and not _simple_ratio(1.065, 0.03)
+
+
+# ---------------------------------------------------------------------------
+# U19 arm h: seed-to-ridge hand-off (ridge.handoff_harmonics, ridge.handoff_continue)
+# ---------------------------------------------------------------------------
+def _harmonics_only_audio(f0=70.0, v=60.0, d=300.0, t0=30.0, dur=60.0, fs=4000.0, amps=(0.0, 1.0, 0.8),
+                          noise=1.0, seed=0, c=343.0):
+    """A straight pass whose harmonics carry the energy: amplitude amps[k-1] on harmonic k (fundamental silent)."""
+    t = np.arange(int(dur * fs)) / fs
+    f = ph.straight_freq_received(t, f0, v, d, t0, c)
+    phase = 2 * np.pi * np.cumsum(f) / fs
+    x = sum(a * np.sin(k * phase) for k, a in enumerate(amps, start=1))
+    return x + noise * np.random.default_rng(seed).standard_normal(len(t)), fs
+
+
+def _peel(x, fs, **ridge_kw):
+    from doppler.ridge import RidgeParams
+
+    sp = audio.compute_spectrogram(x, fs)
+    w = EventWindow(0.0, len(x) / fs, (40.0, 900.0))
+    return fit.characterize_events(sp, [w], RidgeParams(**ridge_kw), c=343.0)
+
+
+def test_harmonic_handoff_recovers_a_pass_whose_fundamental_is_silent():
+    x, fs = _harmonics_only_audio()
+    base = _peel(x, fs)
+    h1 = _peel(x, fs, handoff_harmonics=True)
+    assert not any(abs(e.t_cpa_received_s - 30.9) < 5 for e in base)   # seed on the silent fundamental: lost
+    e = min(h1, key=lambda e: abs(e.t_cpa_received_s - 30.9))
+    assert abs(e.t_cpa_received_s - (30.0 + 300.0 / 343.0)) < 1.0
+    assert abs(e.v_mps / 60.0 - 1) < 0.05 and abs(e.d_m / 300.0 - 1) < 0.15
+    assert round(e.f0_hz / 70.0) in (2, 3)                              # fitted on a harmonic line
+
+
+def test_handoff_is_off_by_default_and_identical_when_the_seed_line_is_strong():
+    from doppler.ridge import RidgeParams
+
+    assert not RidgeParams().handoff_harmonics and not RidgeParams().handoff_continue
+    x, fs = _harmonics_only_audio(amps=(1.0, 0.5, 0.25))
+    key = lambda fits: [(e.t_cpa_received_s, e.f0_hz, e.v_mps, e.d_m) for e in fits]  # noqa: E731
+    assert key(_peel(x, fs)) == key(_peel(x, fs, handoff_harmonics=True, handoff_continue=True))
+
+
+def test_handoff_continue_keeps_peeling_after_a_seed_with_no_ridge(monkeypatch):
+    """A first seed on empty spectrum ends the window's peel; with handoff_continue the next seed is tried."""
+    import doppler.ridge as rmod
+
+    x, fs = _harmonics_only_audio(amps=(1.0, 0.5, 0.25))
+    real = rmod.doppler_hough
+    calls = {"n": 0}
+
+    def hough(spec, Zsub, fi, ti, params, c, n_best=5):
+        calls["n"] += 1
+        if calls["n"] == 1:                                             # a bogus seed far above the pass
+            return [rmod.HoughCandidate(f0_hz=600.0, v_mps=60.0, d_m=300.0, t0_s=10.0, score=1.0)]
+        return real(spec, Zsub, fi, ti, params, c, n_best)
+
+    monkeypatch.setattr(fit, "doppler_hough", hough)
+    assert _peel(x, fs) == []
+    calls["n"] = 0
+    got = _peel(x, fs, handoff_continue=True)
+    assert any(abs(e.t_cpa_received_s - (30.0 + 300.0 / 343.0)) < 1.0 for e in got)
+
+
+def test_handoff_guard_rejects_implausible_fits_and_keeps_plausible_ones(monkeypatch):
+    from types import SimpleNamespace
+
+    from doppler.ridge import RidgeParams
+
+    rp, w = RidgeParams(), EventWindow(0.0, 60.0, (40.0, 900.0))
+    ok = SimpleNamespace(t_cpa_received_s=30.0, v_mps=60.0, d_m=300.0)
+    assert fit.handoff_plausible(ok, w, rp)
+    for bad in (dict(t_cpa_received_s=61.0), dict(t_cpa_received_s=-1.0), dict(v_mps=320.0), dict(v_mps=30.0),
+                dict(d_m=60.0 * 81), dict(d_m=60.0)):           # CPA outside the window; v, d / v outside the Hough ranges
+        assert not fit.handoff_plausible(SimpleNamespace(**{**vars(ok), **bad}), w, rp)
+    assert not RidgeParams().handoff_guard
+    x, fs = _harmonics_only_audio()
+    key = lambda fits: [(e.t_cpa_received_s, e.f0_hz, e.v_mps, e.d_m) for e in fits]  # noqa: E731
+    h1 = key(_peel(x, fs, handoff_harmonics=True))
+    assert key(_peel(x, fs, handoff_harmonics=True, handoff_guard=True)) == h1      # the recovered pass is plausible
+    monkeypatch.setattr(fit, "handoff_plausible", lambda *a: False)
+    assert key(_peel(x, fs, handoff_harmonics=True, handoff_guard=True)) == key(_peel(x, fs))  # rejected = no hand-off
