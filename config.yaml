@@ -190,6 +190,7 @@ cascade:
   silence_hard_prob: 0.99       # reject a cell when an unexplained pass is audible with at least this probability
   max_unmatched_events: 1       # events allowed without a track (cars, birds, aircraft without ADS-B)
   silence_explain: cpa        # cpa: an audible pass is explained only by a CPA-consistent pass of that track | time: by any compatible event in time (lenient)
+  silence_scope: cell         # cell: one silence test per cell (best hypothesis Δt; any of the cell's CPA passes explains) | hypothesis: per hypothesis, own Δt, only its own passes explain (arm V1s; apriori_registry "Code-review arms")
   # Phase 0 (reports/combined_plan.md P0.1-i). A-priori values, set before any measurement (P0.7):
   max_event_radius_m: 12000.0   # PROVISIONAL; source: 2 × the largest audible slant. Caps an event's CPA search radius
   weak_event_rel_sigma: 0.5     # PROVISIONAL; source: arbitrary. σ_d/d above this: scored, doesn't gate pruning (V0: null)
@@ -227,6 +228,14 @@ variants:
   # U19 task 4 screen arm (never a default; apriori_registry "Arm h1g"): V1 with the guarded harmonic hand-off
   V1h1g:
     ridge: {handoff_harmonics: true, handoff_guard: true}
+  # Code-review arms (session 9; never defaults; apriori_registry "Code-review arms")
+  V1s:
+    cascade: {silence_scope: hypothesis}
+  V1r:
+    score: {refine_order: centre_silence}
+  V1sr:
+    cascade: {silence_scope: hypothesis}
+    score: {refine_order: centre_silence}
 
 score:                       # locked N-event scoring: one shared Δt, one f0 per event
   dt_coarse_step_s: 0.5      # coarse Δt grid over each hypothesis' feasible interval, then bounded refinement
@@ -238,6 +247,7 @@ score:                       # locked N-event scoring: one shared Δt, one f0 pe
   refine_in_cell: true       # cell score = best point inside the cell (±half spacing), not its centre
   refine_max_cells: 500      # refine the best N cells by centre score
   refine_dt_window_s: 3.0    # Δt half-width around the centre's Δt while refining
+  refine_order: centre       # centre: refine the best refine_max_cells cells by centre score | centre_silence: by centre score + silence penalty (arm V1r)
   silence_weight: 1.0        # probabilistic-silence penalty (nats) added to the pooled loss
   ambiguity_rel: 0.15        # PROVISIONAL: candidates within 15% of the best score are tied
   inconsistent_rms_sigma: 3.0  # PROVISIONAL (P0.4; source: 3σ convention): rank-1 rms > this × model-free ridge scatter -> "inconsistent"

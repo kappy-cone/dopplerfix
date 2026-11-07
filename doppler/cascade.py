@@ -60,6 +60,9 @@ class CascadeParams:
     silence_audibility: str = "probabilistic"  # probabilistic: P(audible) from level scatter | hard: slant < threshold
     silence_level_sigma_db: float = 6.0  # PROVISIONAL: source-level scatter around the class audibility threshold
     silence_hard_prob: float = 0.99      # probabilistic: reject only when P(audible) of an unexplained pass ≥ this
+    silence_scope: str = "cell"          # cell: one test per cell at its best hypothesis' Δt, explained by any of the
+                                         # cell's CPA passes | hypothesis: per hypothesis, at its own Δt, explained
+                                         # only by its own passes (arm; apriori_registry "Silence per hypothesis")
     max_unmatched_events: int = 1        # events allowed without a track (non-aircraft sources, no ADS-B)
     max_event_radius_m: float = 12000.0  # PROVISIONAL cap on an event's CPA search radius (2 × largest audible slant)
     weak_event_rel_sigma: float | None = None  # σ_d/d above this: event scored but doesn't gate pruning (None: off)
@@ -694,6 +697,22 @@ class TileResult:
     silence_penalty: NDArray       # (M,) nats (probabilistic silence), added to the score
     seconds: dict
     enum_stats: dict = field(default_factory=dict)   # hypothesis-enumeration cap / budget hits (offset_filter)
+    # silence_scope "hypothesis" only (None otherwise): per hypothesis row, whether it passed silence and its
+    # penalty (nats). Scoring then uses only kept hypotheses, each with its own penalty.
+    hyp_silence_keep: NDArray | None = None
+    hyp_silence_penalty: NDArray | None = None
+
+    def scoring_hypotheses(self, h: int) -> tuple[NDArray, float | NDArray]:
+        """Hypothesis rows of cell row ``h`` to score, and the silence penalty (nats) for them.
+
+        Cell scope: every hypothesis of the cell and the cell's single penalty (a float), as before.
+        Hypothesis scope: only the hypotheses that passed silence, each with its own penalty (an array).
+        """
+        q = np.flatnonzero(self.hypotheses.cell == h)
+        if self.hyp_silence_keep is None:
+            return q, float(self.silence_penalty[h])
+        q = q[self.hyp_silence_keep[q]]
+        return q, self.hyp_silence_penalty[q].astype(float)
 
 
 @dataclass
@@ -759,7 +778,16 @@ def run_tile(spec: GridSpec, i0: int, j0: int, setup: CascadeSetup, ts: TrackSet
     sil_pen = np.zeros(M)
     culprits = np.zeros(0, np.int64)
     rows = np.flatnonzero(offset)
-    if len(rows):
+    hyp_keep = hyp_pen = None
+    if p.silence_scope not in ("cell", "hypothesis"):
+        raise ValueError(f"silence_scope must be cell or hypothesis, not {p.silence_scope!r}")
+    if len(rows) and p.silence_scope == "hypothesis":
+        sil_best, sil_dt = best.copy(), dt.copy()
+        silence, n_un, n_aud, sil_pen, sb, sd, culprits, hyp_keep, hyp_pen = _silence_per_hypothesis(
+            tile, passes, hyp, setup, ts, prior, c, p, M)
+        # silence survivors take their best surviving hypothesis; other cells keep the offset-stage best
+        best, dt = np.where(silence, sb, sil_best), np.where(silence, sd, sil_dt)
+    elif len(rows):
         pos = np.full(M, -1, np.int64)
         pos[rows] = np.arange(len(rows))
         on = pos[passes.cell] >= 0
@@ -770,7 +798,43 @@ def run_tile(spec: GridSpec, i0: int, j0: int, setup: CascadeSetup, ts: TrackSet
         culprits = np.unique(sr.culprit_track)
     sec["silence"] = time.perf_counter() - t0
     return TileResult(tile, cpa, offset, silence, passes, hyp, best, dt, n_un, n_aud, culprits,
-                      silence_penalty=sil_pen, seconds=sec, enum_stats=enum_stats)
+                      silence_penalty=sil_pen, seconds=sec, enum_stats=enum_stats,
+                      hyp_silence_keep=hyp_keep, hyp_silence_penalty=hyp_pen)
+
+
+def _silence_per_hypothesis(tile: GridTile, passes: PassTable, hyp: HypothesisTable, setup: "CascadeSetup",
+                            ts: TrackSet, prior: DtPrior, c: float, p: CascadeParams, M: int):
+    """Silence test per hypothesis (``silence_scope: hypothesis``): at the hypothesis' own Δt midpoint, with only
+    its own passes as explainers, so a second CPA-consistent aircraft at an event's time stays unexplained.
+
+    Each hypothesis is tested as a point at its cell's position. A cell survives if any hypothesis does; its
+    best hypothesis (and Δt, counts, penalty) is then the lowest-penalty surviving one, ties by cascade cost.
+    Returns the per-cell arrays the cell-scope path fills, plus per-hypothesis keep and penalty.
+    """
+    H = len(hyp)
+    dt_h = 0.5 * (hyp.dt_lo_s + hyp.dt_hi_s)
+    hh, ee = np.nonzero(hyp.passes >= 0)
+    q = hyp.passes[hh, ee]
+    expl = (hh.astype(np.int64), passes.track[q], ee.astype(np.int64))
+    sr = silence_filter(tile.xyz[hyp.cell], dt_h, setup.events, setup.silence_index, ts.cls, prior, c, p, expl)
+    silence = np.zeros(M, bool)
+    silence[hyp.cell[sr.keep]] = True
+    best = np.full(M, -1, np.int64)
+    kept = np.flatnonzero(sr.keep)
+    if len(kept):
+        o = kept[np.lexsort((hyp.cost[kept], sr.penalty_nats[kept], hyp.cell[kept]))]
+        first = o[np.r_[True, np.diff(hyp.cell[o]) != 0]]
+        best[hyp.cell[first]] = first
+    has = best >= 0
+    dt = np.full(M, np.nan)
+    dt[has] = dt_h[best[has]]
+    n_un, n_aud, pen = np.zeros(M, np.int64), np.zeros(M, np.int64), np.zeros(M)
+    n_un[has], n_aud[has], pen[has] = sr.n_unexplained[best[has]], sr.n_audible[best[has]], sr.penalty_nats[best[has]]
+    # culprits: unexplained audible tracks of the hypotheses that represent surviving cells
+    rep = np.zeros(H, bool)
+    rep[best[has]] = True
+    culprits = np.unique(sr.culprit_track[rep[sr.culprit_cell]]) if len(sr.culprit_cell) else np.zeros(0, np.int64)
+    return silence, n_un, n_aud, pen, best, dt, culprits, sr.keep, sr.penalty_nats
 
 
 def iter_cascade(spec: GridSpec, events: Sequence[ObservedEvent], ts: TrackSet, prior: DtPrior,
