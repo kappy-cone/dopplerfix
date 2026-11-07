@@ -7,6 +7,8 @@ Outputs: a ranked list of candidate locations, a score raster over the search re
 
 The repo serves two modes (see Operating modes): **fully automated** location estimation, which is the current focus and the basis of every validation claim, and later **human-in-the-loop** guidance, where an analyst uses the same scripts to narrow candidates faster. The two will be compared on real recordings to find where a human adds the most accuracy per unit of effort.
 
+**Session start:** where the work stands (open PRs, decisions waiting for the owner, what is fragile) is in HANDOFF.md, which also maps every other document. Multi-session and CI rules are in CONTRIBUTING.md.
+
 ## Core idea
 A single flyover constrains the mic heavily:
 - **t0** (closest-approach time, corrected for sound travel time) ties the mic to where the aircraft was at that moment.
@@ -88,6 +90,8 @@ cli.py                # subcommands: synth, events, tracks, adsblol, regions, lo
                       # (countermeasures: planned, milestone 8)
 inputs/               # committed: search_regions.gpkg
 qgis/                 # committed: doppler_template.qgz, styles/*.qml, build_project.py
+docs/                 # design notes, adr/ (decision records), history.md (earlier session logs)
+reports/              # plan, registry, baselines and experiment reports; reports/data/ holds reference rows
 tests/
 data/                 # gitignored: audio, tracks, DEMs, aircraft DB, proj/ geoid grids
 outputs/              # gitignored
@@ -146,9 +150,9 @@ For each: whether the true location still ranks 1st, how ridge SNR and fitted pa
 2. Synthetic audio + spectrogram + ridge + per-event fit. *(done in session 1)*
 3. Tracks: ADS-B ingest, interpolation, type-code prop/jet classification, event classification, ENU conversion, DEM sampling. *(done in session 2, tag milestone-3)*
 4. Cascade: grid generation, CPA prefilter, offset filter, silence filter, with stage counts. The synthetic true cell survives. (Also: geoid grids, covariance-derived tolerances, outputs contract, QGIS template, plots/viewer.) *(done in session 3)*
-4.5. Real-data calibration: known-location recordings near an airport plus OpenSky tracks; set detection, classification, and audibility thresholds.
+4.5. Real-data calibration: known-location recordings near an airport plus OpenSky tracks; set detection, classification, and audibility thresholds. *(protocol written: docs/field_recordings.md; no recordings yet)*
 5. Full curve modeling + locked N-event scoring. The synthetic true cell ranks 1st. *(done in session 3; also the read-only comparison viewer)*
-6. Exports + QGIS MCP visualization.
+6. Exports + QGIS MCP visualization. *(in part: exports, the QGIS template, and an OpenStreetMap tab in viewer.html)*
 7. Real data: regional run, then the US-wide 1-minute benchmark.
 8. Countermeasures analysis and report.
 9. Human-in-the-loop guidance and evaluation: decisions-as-data consumed by the same pipeline, review tooling, then the automated-vs-HITL comparison on real recordings with known locations (see Validation).
@@ -166,7 +170,7 @@ For each: whether the true location still ranks 1st, how ridge SNR and fitted pa
 - **Turns and climbs** break the straight-line closed forms. Scoring always uses the general track-based model.
 - **Altitude source:** prefer geometric altitude; barometric altitude needs a pressure correction or a wider tolerance.
 - **Geoid:** DEM heights are converted to ellipsoidal with a real geoid model sampled from a grid in data/proj/: GEOID18 (us_noaa_g2018u0.tif, CONUS + PR), EGM96 (us_nga_egm96_15.tif) outside it. The constant `dem.geoid_undulation_m` is only a fallback when no grid is found, and logs a warning. GEOID18 is a hybrid geoid referenced to NAD83(2011), whose ellipsoid heights differ from WGS84/ITRF by ~1–2 m in CONUS; negligible at 200 m spacing but not zero. Near Boulder: GEOID18 −16.10 m, EGM96 −15.58 m. If the grids are missing, re-copy them from QGIS.app/Contents/Resources/qgis/proj/ or run `.venv/bin/pyproj sync --file us_noaa_g2018u0 --target-directory data/proj` (and `--file us_nga_egm96_15`).
-- **Dense TrackSet (US-wide scaling item, not fixed yet):** TrackSet stores (K, T, 3) float64 positions and velocities. 5,000 tracks × a 10-minute window ≈ 0.6 GB. Before the US-wide benchmark, chunk by time or store per-track ragged arrays.
+- **Dense TrackSet (US-wide scaling item, not fixed yet):** TrackSet stores (K, T, 3) float64 positions and velocities. 5,000 tracks × a 10-minute window ≈ 0.6 GB. Before the US-wide benchmark, chunk by time or store per-track ragged arrays. (docs/adr/0004, proposed: measure first; the 1-min benchmark is estimated at ~0.3 GB.)
 - **Scale:** at US scale, memory and runtime blow up without spatial pruning. Tile the grid and process by tile.
 
 ## Non-goals (for now)

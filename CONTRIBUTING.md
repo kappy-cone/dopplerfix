@@ -6,7 +6,8 @@ conventions keep that safe. They add to CLAUDE.md (methodology, rules) and the p
 
 ## 1. Branches and merges
 - **One branch per session or task.** Name it `s<session>-<topic>`, e.g. `s6-measurement`, `s6-p11-likelihood`.
-  Start from an up-to-date `main` (`git pull --rebase`).
+  Sessions started from the desktop app in a worktree get `claude/<topic>`, which is fine too. Start from an
+  up-to-date `main` (`git pull --rebase`).
 - **`main` changes only through a pull request** whose head commit passed the CI gate (§7) and that has been
   reviewed (§3). Squash-merge, so `main` keeps one commit per reviewed step.
 - **Rebase the branch on `main` before opening or updating a PR.** Keep branches short-lived: merge within
@@ -129,12 +130,15 @@ CI is built for fast merges: a session pushes, and its checks are back in about 
     a pinned runner image and Python 3.12, with the installed packages cached on `requirements.txt`.
   - **Target:** about 30 s from push to result.
   - **Superseded runs:** a newer push to the same branch cancels the older run.
-  - **Docs-only pushes** (`*.md`, `reports/`, `docs/`, `doppler.txt`) skip CI.
+  - **Docs-only pushes** (`*.md`, `reports/`, `docs/`) skip CI. A push that touches only
+    `reports/experiments/` scripts skips it too; `tests/test_experiments_import.py` checks those scripts on the
+    next code push.
 - **After merge** (job `after-merge`):
   - **When:** runs on every push to `main`, and by hand on any branch (Actions tab → tests → Run workflow,
     or `gh workflow run tests.yml --ref <branch>`).
   - **What:** the `heavy` tests (the locked-scoring true-cell checks) plus the slow suite, on 4 workers.
-  - **Duration:** about 5–10 min. Nobody waits on it.
+  - **Duration:** about 14 min on CI (about 11 min locally on 4 workers; measured 2026-11). Nobody waits on it.
+    Shortening it is `reports/test_plan.md` T3 and T4.
 - **What blocks a merge:**
   - **A red gate on the PR's head commit.** A failure is fixed on the branch, or shown to be a false alarm
     (runner or network trouble, not the code) and re-run.

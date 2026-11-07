@@ -69,7 +69,7 @@ flowchart LR
 | Stage | What it does | Code |
 |---|---|---|
 | **Events** | Finds flyover tones, traces each Doppler ridge, and fits speed, distance and closest-approach time, with covariance-based error bars. Labels each event prop or jet. | `detect.py` `ridge.py` `fit.py` `classify.py` |
-| **Tracks** | Ingests ADS-B (OpenSky format), removes outliers, splits at gaps, interpolates, and classifies prop/jet from type codes. | `tracks.py` `aircraft_types.py` |
+| **Tracks** | Ingests ADS-B (OpenSky state vectors, or adsb.lol daily trace archives), removes outliers, splits at gaps, interpolates, and classifies prop/jet from type codes. | `tracks.py` `adsblol.py` `aircraft_types.py` |
 | **Grid** | 200 m cells over a named search region. Ground height comes from a DEM plus a geoid model, so heights compare with GPS altitude. | `geo.py` |
 | **Cascade** | Keeps only cells consistent with each event's distance and speed, then with the measured gaps between events under one shared clock offset. Then it rejects cells where an aircraft *should* have been heard but wasn't. It reports how many cells survive each stage. | `cascade.py` |
 | **Scoring** | Models every event's curve from real track geometry for each surviving cell, with one shared time shift and a free source frequency per event. Each cell is refined to its best interior point. | `score.py` |
@@ -120,10 +120,13 @@ Other commands:
 
 | Command | Purpose |
 |---|---|
-| `cli.py events` | Detect and fit flyovers in a recording |
+| `cli.py events` | Detect and fit flyovers in a recording (`--out X.parquet` feeds `locate --events`) |
 | `cli.py tracks` | Ingest, clean and classify ADS-B tracks |
+| `cli.py adsblol` | Crop an adsb.lol daily archive to a region and time window ([docs/adsblol_ingest.md](docs/adsblol_ingest.md)) |
 | `cli.py regions` | List or add search regions (`inputs/search_regions.gpkg`) |
-| `cli.py ablate` | Paired, resumable ablation runs over the realism layer |
+| `cli.py locate --variant V0` | Run with a named config overlay from `config.yaml` `variants:` (V0 strict, V1 default, comparison arms) |
+| `cli.py verify-result` | Check a run's saved candidates against its blind result commitment ([docs/null_tests.md](docs/null_tests.md)) |
+| `cli.py ablate` | Paired, resumable ablation runs over the realism layer (smoke run first: CONTRIBUTING §4.1) |
 | `cli.py clean` | Prune old runs, keeping the newest N |
 
 Tests:
@@ -136,8 +139,8 @@ Tests:
 .venv/bin/python -m pytest -m "heavy or slow" -n 4
 ```
 
-The first is the ~30 s gate that CI runs on every push. The second covers end-to-end and scoring checks;
-CI runs them after each merge.
+The first is the merge gate that CI runs on every push (about 30 s on CI over 6 shards, about 1 min locally).
+The second covers end-to-end and scoring checks (about 11 min locally); CI runs it after each merge.
 
 ## Where it stands
 
@@ -147,7 +150,7 @@ CI runs them after each merge.
 | 4 Cascade: grid, prefilter, offset and silence filters, outputs, QGIS template | ✅ |
 | 5 Full curve modelling and locked N-event scoring | ✅ on clean synthetic data |
 | 4.5 Real-recording calibration (detection, classification, audibility) | 📝 protocol written ([docs/field_recordings.md](docs/field_recordings.md)) |
-| 6 Exports and QGIS visualisation | 🔶 exports and template done |
+| 6 Exports and QGIS visualisation | 🔶 exports, QGIS template and an OpenStreetMap tab in `viewer.html` |
 | 7 Real data: regional run, then a US-wide 1-minute benchmark | ⬜ |
 | 8 Countermeasures: does high-pass filtering, masking or a phone codec defeat it? | ⬜ |
 | 9 Human-in-the-loop guidance, compared with fully automated runs | ⬜ |
@@ -155,13 +158,15 @@ CI runs them after each merge.
 **Measured so far** (all synthetic; no real recordings yet):
 - **Clean scenarios:** the true cell ranks 1st in every multi-event scenario. The rank-1 estimate is 3–52 m from
   the hidden microphone.
-- **Realistic scenarios** (the realism layer fully on, 100 paired seeds):
-  - The robust variant puts the right answer at rank 1 in 34 of 100 runs.
-  - 21 of 100 are counted correct: within 200 m, and confident enough to claim.
-  - 11 of 100 are confidently wrong.
-  - Raising those numbers is the current work ([reports/stageA.md](reports/stageA.md)).
-- **Detection:** under full realism, 75 of 100 flyovers (seeds 0–49) are detected. A longer-window detection arm reaches
-  82 ([reports/u19.md](reports/u19.md)). Proposals for the rest are in
+- **Realistic scenarios** (the realism layer fully on; Stage A2, the current reference, seeds 0–49 of a
+  60 s two-event clip):
+  - The robust variant (V1) puts the right answer at rank 1 in 18 of 50 runs.
+  - 10 of 50 are counted correct: within 200 m, and confident enough to claim.
+  - 5 of 50 are confidently wrong.
+  - Most remaining failures are discrimination: the true cell survives but another scores better. Raising
+    these numbers is the current work ([reports/stageA.md](reports/stageA.md) §A2).
+- **Detection:** under full realism, 82 of 100 flyovers (seeds 0–49) are detected with the 3 s long-window
+  rows, now the default (75 before; [reports/u19.md](reports/u19.md)). Proposals for the rest are in
   [docs/u19_detection_literature.md](docs/u19_detection_literature.md).
 
 The realism layer simulates:
@@ -178,13 +183,14 @@ looking at the truth (`reports/apriori_registry.md` records where every threshol
 
 ```
 doppler/      pure-function library: physics, audio, detect, ridge, fit, classify, aircraft_types,
-              tracks, geo, cascade, score, export, plot, synth, realism, evaluate
+              tracks, adsblol, geo, cascade, score, export, plot, synth, realism, evaluate,
+              nulltest, commitment
 cli.py        command-line entry point (all file I/O lives here, in export.py and in plot.py)
 config.yaml   every threshold and tolerance; values awaiting real-data calibration are marked PROVISIONAL
 inputs/       search regions (GeoPackage)
 qgis/         QGIS project template, layer styles and a headless builder
 tests/        pytest suite: fast gate, `heavy` and `slow` markers
-docs/         design notes: field recordings, OpenSky ingest, UAT coverage, detection literature
+docs/         design notes (field recordings, ingest, UAT coverage, detection literature), adr/, history.md
 reports/      plan, baselines and experiment reports
 data/ outputs/   local only (gitignored): geoid grids, DEMs, aircraft DB, runs
 ```
@@ -194,11 +200,12 @@ data/ outputs/   local only (gitignored): geoid grids, DEMs, aircraft DB, runs
 | Document | For |
 |---|---|
 | [CLAUDE.md](CLAUDE.md) | The authoritative spec: physics, methodology, conventions, known pitfalls |
+| [HANDOFF.md](HANDOFF.md) | **Start here for the current state:** what's in flight, what waits for a decision, how to run things, and a map of every document |
 | [reports/combined_plan.md](reports/combined_plan.md) | The current plan and every recorded decision |
-| [reports/stageA.md](reports/stageA.md) | The baseline under full realism, and the U18 result |
-| [HANDOFF.md](HANDOFF.md) | Session state: what's done, what's fragile, how to run things |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Branches, reviews, CI policy, multi-session conventions |
-| [docs/](docs/) | Field-recording protocol, OpenSky ingest, the pyopensky dependency, UAT coverage, detection proposals |
+| [reports/stageA.md](reports/stageA.md) | The baselines under full realism: Stage A, U18 and the current reference, Stage A2 |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Branches, reviews, smoke runs, CI policy, multi-session conventions |
+| [CONTEXT.md](CONTEXT.md), [docs/adr/](docs/adr/README.md) | Performance history and its rules; architecture decision records |
+| [docs/](docs/) | Field-recording protocol, OpenSky and adsb.lol ingest, the pyopensky dependency, UAT coverage, detection proposals, session history |
 
 ## Related work
 

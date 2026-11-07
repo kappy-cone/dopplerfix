@@ -157,8 +157,8 @@ session running on the compute machine, which owns `config.yaml`, `fit.py`, `rid
   item 10 (`tests/test_experiments_import.py`), item 11 (`cascade.refine_cpa`), item 12 (comment).
 - Done after the U19 branch merged (#17): item 2's two `plot.py` keys (`viewer.event_time_px` and
   `event_freq_px`, now in `config.yaml`; this moves `config_sha256`, as #17's new keys already did).
-- Still deferred: item 5's HANDOFF rewrite (that session will rewrite HANDOFF
-  at its end).
+- Done in session 9 (docs refresh): item 5's HANDOFF rewrite. HANDOFF.md now holds only the current state; the
+  earlier session logs moved unchanged to `docs/history.md`.
 - Waiting for your decision: item 6 (the lock should come from the compute machine's venv, which produced the
   reference rows), item 9 (ruff is a new dependency), item 13 (the pyarrow switch).
 
