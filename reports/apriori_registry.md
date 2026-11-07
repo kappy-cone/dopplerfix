@@ -168,6 +168,9 @@ all hold:**
   detection is identical), rank-1 error and true-cell rank (Wilcoxon), total wall time.
 - Known cost, as for U19's C3: a timeout flip is wall-clock noise and can move D1 or D2 by a unit.
 
+**Outcome (session 9): REJECTED.** D1 107 → 107 and D2 17 → 17 pass; D3 fails (median ratio 1.57, below 2).
+`refine_lbfgs_top_k` stays null. Details: `reports/two_stage.md`; rows: `reports/data/two_stage_rows.jsonl.gz`.
+
 ## Later phases
 
 These entries are listed in plan P0.7 and are added to config.yaml only when their item is built:
