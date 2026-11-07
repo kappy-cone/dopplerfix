@@ -349,6 +349,199 @@ def score_hypotheses(events: Sequence[ObservedEvent], hyps: Sequence[Hypothesis]
     return [score_hypothesis(h, ridges, ts, cell_xyz[h.cell_id], start_time_s, c, p, dt_prior) for h in hyps]
 
 
+def _bounded_brent(x1: float, x2: float, xatol: float = 1e-5, maxiter: int = 500):
+    """scipy 1.18.1 ``_minimize_scalar_bounded`` as a generator (ADR-0006): yields each probe x, receives f(x).
+
+    Ported line for line (the same scalar float arithmetic, display code dropped), so the probe sequence and the
+    result are those of ``minimize_scalar(method="bounded")``; tests/test_score_lockstep.py checks it against
+    scipy. Returns ``(x, fun)`` as StopIteration's value, with the types ``minimize_scalar`` gives them.
+    """
+    maxfun = maxiter
+    sqrt_eps = np.sqrt(2.2e-16)
+    golden_mean = 0.5 * (3.0 - np.sqrt(5.0))
+    a, b = x1, x2
+    fulc = a + golden_mean * (b - a)
+    nfc, xf = fulc, fulc
+    rat = e = 0.0
+    x = xf
+    fx = yield x
+    num = 1
+    fu = np.inf
+
+    ffulc = fnfc = fx
+    xm = 0.5 * (a + b)
+    tol1 = sqrt_eps * np.abs(xf) + xatol / 3.0
+    tol2 = 2.0 * tol1
+
+    while (np.abs(xf - xm) > (tol2 - 0.5 * (b - a))):
+        golden = 1
+        # Check for parabolic fit
+        if np.abs(e) > tol1:
+            golden = 0
+            r = (xf - nfc) * (fx - ffulc)
+            q = (xf - fulc) * (fx - fnfc)
+            p = (xf - fulc) * q - (xf - nfc) * r
+            q = 2.0 * (q - r)
+            if q > 0.0:
+                p = -p
+            q = np.abs(q)
+            r = e
+            e = rat
+
+            # Check for acceptability of parabola
+            if ((np.abs(p) < np.abs(0.5 * q * r)) and (p > q * (a - xf)) and
+                    (p < q * (b - xf))):
+                rat = (p + 0.0) / q
+                x = xf + rat
+
+                if ((x - a) < tol2) or ((b - x) < tol2):
+                    si = np.sign(xm - xf) + ((xm - xf) == 0)
+                    rat = tol1 * si
+            else:      # do a golden-section step
+                golden = 1
+
+        if golden:  # do a golden-section step
+            if xf >= xm:
+                e = a - xf
+            else:
+                e = b - xf
+            rat = golden_mean * e
+
+        si = np.sign(rat) + (rat == 0)
+        x = xf + si * np.maximum(np.abs(rat), tol1)
+        fu = yield x
+        num += 1
+
+        if fu <= fx:
+            if x >= xf:
+                a = xf
+            else:
+                b = xf
+            fulc, ffulc = nfc, fnfc
+            nfc, fnfc = xf, fx
+            xf, fx = x, fu
+        else:
+            if x < xf:
+                a = x
+            else:
+                b = x
+            if (fu <= fnfc) or (nfc == xf):
+                fulc, ffulc = nfc, fnfc
+                nfc, fnfc = x, fu
+            elif (fu <= ffulc) or (fulc == xf) or (fulc == nfc):
+                fulc, ffulc = x, fu
+
+        xm = 0.5 * (a + b)
+        tol1 = sqrt_eps * np.abs(xf) + xatol / 3.0
+        tol2 = 2.0 * tol1
+
+        if num >= maxfun:
+            break
+
+    fun = np.asarray(fx)[()]                      # as minimize_scalar reshapes res.fun / res.x
+    return np.reshape(xf, fun.shape)[()], fun
+
+
+def _lockstep_costs(dts: dict[int, NDArray], hyps: Sequence[Hypothesis], ridges: list[RidgeObs], xyz: NDArray,
+                    ts: TrackSet, start_s: float, c: float, k: float) -> dict[int, tuple]:
+    """``_hyp_cost`` (Huber loss) for several hypotheses of one cell at once: ``dts[i]`` are hypothesis i's Δt values.
+
+    Each event's term depends only on (cell, the event's track, Δt), so the requests are grouped by
+    (event, track) and each group costs one ``modeled_ratio`` / ``_event_cost`` call, its Δt values stacked as
+    rows. Row results are bit-identical to a call with those rows alone (tests/test_score.py checks the
+    modeled_ratio rows), so each hypothesis' (cost, f0, rms, miss) arrays (N, G_i) equal ``_hyp_cost``'s.
+    """
+    N = len(ridges)
+    out, groups = {}, {}
+    for i, d in dts.items():
+        G = len(d)
+        cost, f0, rms, miss = np.zeros((N, G)), np.zeros((N, G)), np.zeros((N, G)), np.zeros((N, G), np.int64)
+        for e, (rd, k_) in enumerate(zip(ridges, hyps[i].assignment)):
+            if len(rd.t_s) == 0:
+                continue
+            if k_ < 0:
+                f0[e], rms[e] = np.nan, np.nan
+                continue
+            groups.setdefault((e, int(k_)), []).append(i)
+        out[i] = (cost, f0, rms, miss)
+    for (e, k_), idx in groups.items():
+        rd = ridges[e]
+        d = np.concatenate([dts[i] for i in idx]) if len(idx) > 1 else dts[idx[0]]
+        t_rx = start_s + d[:, None] + rd.t_s[None, :]
+        ratio, _, _, _ = modeled_ratio(xyz, k_, ts, t_rx, c)
+        cst, f0, rms, miss = _event_cost(rd.f_hz, ratio, rd.sigma_hz, k)
+        o = 0
+        for i in idx:
+            G = len(dts[i])
+            r = out[i]
+            r[0][e], r[1][e], r[2][e], r[3][e] = cst[o:o + G], f0[o:o + G], rms[o:o + G], miss[o:o + G]
+            o += G
+    return out
+
+
+def score_cell_lockstep(hyps: Sequence[Hypothesis], ridges: list[RidgeObs], ts: TrackSet, xyz: NDArray,
+                        start_time_s: float, c: float, p: ScoreParams,
+                        dt_prior: tuple[float, float] | None = None) -> list[CellScore]:
+    """``score_hypothesis`` for every hypothesis of one cell, in lockstep (ADR-0006); identical results, same order.
+
+    The three phases of ``score_hypothesis`` (coarse Δt grid, bounded Brent, final evaluation) each run for all
+    hypotheses together: every Brent search is a generator (:func:`_bounded_brent`) advanced one probe at a time,
+    and each round's probes cost one call per (event, track) (:func:`_lockstep_costs`) instead of one per
+    (hypothesis, event). Sums over events use the same numpy expressions as ``score_hypothesis``, on arrays of
+    the same shape. The calibrated likelihood (a comparison arm) keeps the one-at-a-time path: its robust scale
+    branches on the whole batch (``_event_nll``), so stacking hypotheses could change a result.
+    """
+    if p.likelihood == "calibrated" or len(hyps) == 0:
+        return [score_hypothesis(h, ridges, ts, xyz, start_time_s, c, p, dt_prior) for h in hyps]
+    H = len(hyps)
+    n_pts = np.array([len(r.t_s) for r in ridges])
+    setup, grids = [], {}
+    for i, hyp in enumerate(hyps):
+        lo, hi = hyp.dt_bounds_s
+        lo, hi = lo - p.dt_pad_s, hi + p.dt_pad_s
+        if dt_prior is not None:
+            lo, hi = max(lo, dt_prior[0]), min(hi, dt_prior[1])
+        matched = np.array([k_ >= 0 for k_ in hyp.assignment])
+        total = max(int(n_pts[matched].sum()), 1)
+        grids[i] = np.arange(lo, hi + 1e-9, p.dt_coarse_step_s) if hi > lo else np.array([lo])
+        setup.append((lo, hi, matched, total))
+    coarse = _lockstep_costs(grids, hyps, ridges, xyz, ts, start_time_s, c, p.huber_k)
+    best, gens, probe, gsum = [None] * H, {}, {}, [None] * H
+    for i in range(H):
+        lo, hi = setup[i][:2]
+        grid = grids[i]
+        gsum[i] = coarse[i][0].sum(0)
+        j = int(np.argmin(gsum[i]))
+        a, b = max(lo, grid[j] - p.dt_coarse_step_s), min(hi, grid[j] + p.dt_coarse_step_s)
+        best[i] = (grid[j], j)
+        if b > a:
+            gens[i] = _bounded_brent(a, b, xatol=1e-3)
+            probe[i] = next(gens[i])
+    while probe:                                        # one Brent probe per active hypothesis per round
+        res = _lockstep_costs({i: np.array([x]) for i, x in probe.items()}, hyps, ridges, xyz, ts, start_time_s, c,
+                              p.huber_k)
+        nxt = {}
+        for i in probe:
+            try:
+                nxt[i] = gens[i].send(float(res[i][0].sum()))
+            except StopIteration as stop:
+                x, fun = stop.value
+                g, j = best[i]
+                if fun <= gsum[i][j]:
+                    best[i] = (float(x), j)
+        probe = nxt
+    final = _lockstep_costs({i: np.array([best[i][0]]) for i in range(H)}, hyps, ridges, xyz, ts, start_time_s, c,
+                            p.huber_k)
+    out = []
+    for i, hyp in enumerate(hyps):
+        cst, f0, rms, miss = final[i]
+        matched, total = setup[i][2], setup[i][3]
+        out.append(CellScore(hyp.cell_id, tuple(hyp.assignment), float(best[i][0]), f0[:, 0],
+                             _pooled(cst[:, 0].sum(), total, p), cst[:, 0] / np.maximum(n_pts, 1), n_pts, rms[:, 0],
+                             miss[:, 0], n_unmatched=int((~matched).sum())))
+    return out
+
+
 def best_per_cell(scores: Sequence[CellScore]) -> list[CellScore]:
     """Best hypothesis per cell by rank_key, sorted (rank 1 first)."""
     best: dict[int, CellScore] = {}
@@ -529,8 +722,9 @@ class CellResult:
 
 def rank_cells(events: Sequence[ObservedEvent], cells: Sequence[tuple], ts: TrackSet, start_time_s: float, c: float,
                p: ScoreParams, dt_prior: tuple[float, float] | None, half_cell_m: float) -> list[CellResult]:
-    """Score every hypothesis of every cell (centre), keep each cell's best, refine the best
-    ``refine_max_cells`` cells within their footprint, and return cells sorted by final score.
+    """Score every hypothesis of every cell (centre; in lockstep per cell, score_cell_lockstep), keep each cell's
+    best, refine the best ``refine_max_cells`` cells within their footprint, and return cells sorted by final
+    score.
 
     ``cells``: (cell_id, xyz, hypotheses[, silence_penalty_nats]). The penalty (probabilistic silence) is
     added to the pooled loss as silence_weight · nats / total ridge points.
@@ -542,7 +736,7 @@ def rank_cells(events: Sequence[ObservedEvent], cells: Sequence[tuple], ts: Trac
     pen = {cl[0]: (float(cl[3]) if len(cl) > 3 else 0.0) * p.silence_weight / per for cl in cells}
     out = []
     for cell_id, xyz, hyps, *_ in cells:
-        scs = [score_hypothesis(h, ridges, ts, xyz, start_time_s, c, p, dt_prior) for h in hyps]
+        scs = score_cell_lockstep(hyps, ridges, ts, xyz, start_time_s, c, p, dt_prior)
         j = min(range(len(scs)), key=lambda i: scs[i].rank_key)
         out.append(CellResult(cell_id, j, scs[j], scs[j].cost, np.zeros(2), np.asarray(xyz, float), False))
     if p.refine_in_cell:

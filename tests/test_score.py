@@ -368,8 +368,9 @@ def test_batched_refinement_matches_the_frozen_oracle(monkeypatch):
 
 @pytest.mark.heavy                 # ~60-90 s: two full rank_cells runs over a cascade's survivors
 def test_rank_cells_is_bit_identical_to_the_frozen_oracle(monkeypatch):
-    """rank_cells with batched refinement and packed sampling reproduces the one-at-a-time version on every
-    surviving cell of a clean two-event scenario: score, Δt, f0, assignment and refined position."""
+    """rank_cells with lockstep centre scoring, batched refinement and packed sampling reproduces the
+    one-at-a-time version on every surviving cell of a clean two-event scenario: score, Δt, f0, assignment and
+    refined position."""
     import cli
     from doppler import cascade as cs, geo
 
@@ -396,6 +397,7 @@ def test_rank_cells_is_bit_identical_to_the_frozen_oracle(monkeypatch):
     new = score.rank_cells(*args)
     with monkeypatch.context() as m:
         m.setattr(score, "refine_in_cell", oracle.refine_in_cell)
+        m.setattr(score, "score_cell_lockstep", oracle.score_cell)
         m.setattr(tracks.TrackSet, "_sample_one", oracle.sample_one)
         old = score.rank_cells(*args)
     assert [r.cell_id for r in new] == [r.cell_id for r in old]

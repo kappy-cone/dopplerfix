@@ -1,7 +1,9 @@
 """Frozen one-at-a-time versions of locked-scoring internals, kept as test oracles.
 
 Copied verbatim from main at f6baa69, before refinement was batched (score.refine_in_cell) and track sampling
-packed (TrackSet._sample_one). The batched versions must reproduce these bit for bit (tests/test_score.py).
+packed (TrackSet._sample_one); ``score_hypothesis`` from main at 0f094d8, before centre scoring ran in lockstep
+(score.score_cell_lockstep, ADR-0006). The batched versions must reproduce these bit for bit
+(tests/test_score.py, tests/test_score_lockstep.py).
 Never edit them to match a change: a deliberate result change replaces this oracle in its own commit.
 """
 from __future__ import annotations
@@ -80,3 +82,37 @@ def refine_in_cell(hyp: Hypothesis, ridges: list[RidgeObs], ts: TrackSet, xyz: N
     return sc, u, pos(u)
 
 
+
+
+def score_hypothesis(hyp: Hypothesis, ridges: list[RidgeObs], ts: TrackSet, xyz: NDArray, start_time_s: float,
+                     c: float, p: ScoreParams, dt_prior: tuple[float, float] | None = None) -> CellScore:
+    """Locked scoring of one hypothesis: one Δt for every event (coarse grid + bounded refinement), one f0 each."""
+    from scipy.optimize import minimize_scalar
+
+    lo, hi = hyp.dt_bounds_s
+    lo, hi = lo - p.dt_pad_s, hi + p.dt_pad_s
+    if dt_prior is not None:
+        lo, hi = max(lo, dt_prior[0]), min(hi, dt_prior[1])
+    n_pts = np.array([len(r.t_s) for r in ridges])
+    matched = np.array([k_ >= 0 for k_ in hyp.assignment])
+    total = max(int(n_pts[matched].sum()), 1)
+    grid = np.arange(lo, hi + 1e-9, p.dt_coarse_step_s) if hi > lo else np.array([lo])
+    cost, *_ = _hyp_cost(grid, ridges, hyp.assignment, xyz, ts, start_time_s, c, p.huber_k, p)
+    j = int(np.argmin(cost.sum(0)))
+    a, b = max(lo, grid[j] - p.dt_coarse_step_s), min(hi, grid[j] + p.dt_coarse_step_s)
+    best = grid[j]
+    if b > a:
+        res = minimize_scalar(lambda d: float(_hyp_cost(np.array([d]), ridges, hyp.assignment, xyz, ts,
+                                                        start_time_s, c, p.huber_k, p)[0].sum()),
+                              bounds=(a, b), method="bounded", options={"xatol": 1e-3})
+        if res.fun <= cost.sum(0)[j]:
+            best = float(res.x)
+    cst, f0, rms, miss = _hyp_cost(np.array([best]), ridges, hyp.assignment, xyz, ts, start_time_s, c, p.huber_k, p)
+    return CellScore(hyp.cell_id, tuple(hyp.assignment), float(best), f0[:, 0], _pooled(cst[:, 0].sum(), total, p),
+                     cst[:, 0] / np.maximum(n_pts, 1), n_pts, rms[:, 0], miss[:, 0],
+                     n_unmatched=int((~matched).sum()))
+
+
+def score_cell(hyps, ridges, ts, xyz, start_time_s, c, p, dt_prior=None) -> list[CellScore]:
+    """score.score_cell_lockstep before lockstep: one hypothesis at a time."""
+    return [score_hypothesis(h, ridges, ts, xyz, start_time_s, c, p, dt_prior) for h in hyps]
