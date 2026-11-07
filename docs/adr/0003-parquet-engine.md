@@ -1,8 +1,8 @@
 # ADR-0003: Parquet engine: stay on fastparquet until pyopensky or pandas 4
 
-**Status:** Proposed (2026-11-06; awaiting the project owner's decision)
+**Status:** Accepted (2026-11-06, by the project owner)
 **Date:** 2026-11-06
-**Deciders:** project owner (not yet decided)
+**Deciders:** project owner
 **Audit item:** 13
 
 ## Context

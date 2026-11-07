@@ -1,8 +1,8 @@
 # ADR-0004: TrackSet memory: measure first; time-chunking or two-tier sampling for long clips, not a ragged layout
 
-**Status:** Proposed (2026-11-06; awaiting the project owner's decision)
+**Status:** Accepted (2026-11-06, by the project owner)
 **Date:** 2026-11-06
-**Deciders:** project owner (not yet decided) (it amends a CLAUDE.md Known-pitfalls item)
+**Deciders:** project owner (it amends a CLAUDE.md Known-pitfalls item)
 **Audit item:** 8
 
 ## Context

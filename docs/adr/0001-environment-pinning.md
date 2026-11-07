@@ -1,8 +1,8 @@
 # ADR-0001: Environment pinning: record versions in each run, no transitive lock
 
-**Status:** Proposed (2026-11-06; awaiting the project owner's decision)
+**Status:** Accepted (2026-11-06, by the project owner)
 **Date:** 2026-11-06
-**Deciders:** project owner (not yet decided)
+**Deciders:** project owner
 **Audit item:** 6 (reports/tech_debt_audit.md)
 
 ## Context
