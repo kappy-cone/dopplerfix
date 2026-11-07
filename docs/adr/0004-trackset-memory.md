@@ -85,5 +85,5 @@ benchmark, so the cheapest correct step now is to measure.
 
 ## Action items
 1. [ ] run.json: `trackset: {K, T, bytes}`.
-2. [ ] CLAUDE.md Known pitfalls: reword "Dense TrackSet" as in Decision 1, pointing here.
+2. [x] CLAUDE.md Known pitfalls: reword "Dense TrackSet" as in Decision 1, pointing here (docs refresh, 2026-11-06).
 3. [ ] After the first US-wide dry run: replace the estimates above with measured values.

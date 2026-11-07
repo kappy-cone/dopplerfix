@@ -16,7 +16,7 @@ are handled differently (below).
 
 | When | What | Result | Where |
 |---|---|---|---|
-| Session 3 | Robust variant (≤1 unmatched event, probabilistic silence) | Many more survivors; scoring 276 hypotheses took 23 s on clean data | HANDOFF "Two design variants" |
+| Session 3 | Robust variant (≤1 unmatched event, probabilistic silence) | Many more survivors; scoring 276 hypotheses took 23 s on clean data | docs/history.md "Two design variants" |
 | Session 4, P0.1 i | Best-first hypothesis enumeration with separate full/partial caps and a budget; a CPA radius cap; weak events don't gate pruning (V1) | Bounds hypotheses per cell; caps are config knobs | `cascade.py`, `reports/apriori_registry.md` |
 | Session 4, P0.4 | `ablate` per-variant wall-clock cap, `--jobs`, free-space guard | Makes long runs bounded; makes timeouts an outcome | `cli.py cmd_ablate` |
 | Session 5, step 1b | cProfile of four heavy V1 units (51–79 k hypotheses) | Scoring 96–99 % of the run; centre scoring 88–91 %, of which the per-hypothesis Δt refinement (`minimize_scalar`, ~18 `_hyp_cost` calls each) 72–75 %; `modeled_ratio` ~74 %, `TrackSet.sample` ~48 %. **Per-call numpy overhead on ~60-point arrays, not arithmetic.** In-cell refinement 7–8 %, cascade 1–4 % | `reports/stageA.md` §"step 1b" |
