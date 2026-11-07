@@ -1,8 +1,8 @@
 # ADR-0002: Lint in the merge gate: ruff, pyflakes rules only
 
-**Status:** Proposed (2026-11-06; awaiting the project owner's decision)
+**Status:** Accepted (2026-11-06, by the project owner)
 **Date:** 2026-11-06
-**Deciders:** project owner (not yet decided) (new dependency, CLAUDE.md Conventions)
+**Deciders:** project owner (new dependency, CLAUDE.md Conventions)
 **Audit item:** 9
 
 ## Context
