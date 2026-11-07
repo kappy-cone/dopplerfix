@@ -3,8 +3,7 @@
 **No prompt is queued.** The owner writes the next one after choosing among the candidates in HANDOFF.md
 ("Next work").
 
-- **Last brief, now in progress:** `reports/test_plan.md` §7, which implements T1 (#21) and T2 (#22) and
-  stops after T2.
+- **Last brief:** `reports/test_plan.md` §7, T1 and T2. Done (#21, #22, merged).
 - **Brief before that (session 8, task B, the Stage A2 reference run):** done in #16. Its text is in git
   history (`git show b33ebaa:NEXT_SESSION.md`).
 

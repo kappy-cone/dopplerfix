@@ -6,7 +6,7 @@ session logs (sessions 3–6: validation tables, the session-3 decisions, the re
 [docs/history.md](docs/history.md), unchanged. Update this file at the end of each session: replace what
 changed and move what is no longer current into the history.
 
-*Last updated: 2026-11-06 (session 9, laptop). Main at `5ef3a37`.*
+*Last updated: 2026-11-06 (session 9, laptop). Main at `cb75930`.*
 
 ## Where things stand
 - **Milestones.** 1–5 are done (on synthetic data). 6 is partly done: exports, the QGIS template, and a Map tab
@@ -39,21 +39,20 @@ changed and move what is no longer current into the history.
   the Phase 1 quick wins are merged (#18): strict config reads (`cli.need`), a gate test that experiment
   scripts still resolve, and the transcript out of the tree. [CONTEXT.md](CONTEXT.md) records the
   performance history and its rules. [docs/adr/](docs/adr/README.md) holds six ADRs for the open items.
-  [reports/test_plan.md](reports/test_plan.md) is the testing strategy (T1–T7).
+  [reports/test_plan.md](reports/test_plan.md) is the testing strategy (T1–T7). T1, a gate test of the
+  per-event pipeline (#21), and T2, golden Stage A2 rows rebuilt and compared after merge (#22), are merged.
+  ADRs 0001–0005 are accepted (#24).
 
 ## In flight (open PRs)
 | PR | What | Where it runs |
 |---|---|---|
-| #21 | T1: gate test of the per-event pipeline (detect → fit → classify on a 60 s clip) | compute-machine session |
-| #22 | T2: golden-row test, rebuilding 3 Stage A2 units and comparing their result fields | compute-machine session |
 | #23 | Code-review fixes: missing vertical rate filled from altitude (default, synthetic results unchanged); `cascade.silence_scope` (arm V1s) and `score.refine_order` (arm V1r), off by default | laptop session |
 | #7 | Old session-7 HANDOFF update; main has since moved past it, and this file replaces it | can be closed |
 
 ## Waiting for the owner
 Each item is the owner's call; sessions don't decide them.
-1. **ADRs 0001–0006** ([docs/adr/](docs/adr/README.md)): status "Proposed". In session 9 the owner picked the
-   recommended option for all six in chat. The files still say Proposed, so confirm and mark them Accepted
-   (or say otherwise).
+1. **ADR-0006** (lockstep centre scoring; [docs/adr/](docs/adr/README.md)) is still Proposed. 0001–0005 were
+   accepted on 2026-11-06.
 2. **Code-review arms V1s / V1r (#23):** set a screen and decision rule before the first measurement.
    V1s is the plan's **R2 "per-hypothesis silence"** (plan §8.4 screens it on scene, levels and adsb, plus
    all-on and clean).
@@ -80,12 +79,13 @@ Each item is the owner's call; sessions don't decide them.
 
 ## Next work (candidates; each needs the owner's OK)
 In the order the docs give:
-- After #21/#22: T3 (build fixtures once) and T4 (calibration checks only on change)
+- T3 (build fixtures once) and T4 (calibration checks only on change)
   ([reports/test_plan.md](reports/test_plan.md)).
-- The ADRs once accepted:
-  - 0002 ruff and 0001 run environment (small);
-  - 0005 `run_locate` stage split, after T2, so CI checks it;
-  - 0006 lockstep centre scoring, after T2, before the two-stage refinement arm.
+- The accepted ADRs' action items:
+  - 0002 ruff in the gate and 0001 the run environment in run.json (small);
+  - 0004: log the TrackSet's K, T and bytes in run.json;
+  - 0005 `run_locate` stage split (T2's golden rows now check it in CI).
+- ADR-0006 (lockstep centre scoring), if accepted: before the two-stage refinement arm.
 - Arms with a registered rule: V1s / V1r, the two-stage refinement arm (NEXT_SESSION of session 8), and the
   targeted methodology review.
 - Real data: field recordings (4.5), then P4.3 real-traffic replay and P5.3 UAT coverage.
@@ -123,7 +123,7 @@ QT_QPA_PLATFORM=offscreen /Applications/QGIS.app/Contents/MacOS/python -s qgis/b
 - **Timeouts are outcomes.** The 900 s per-run cap means scoring speed changes results on heavy units
   (CONTEXT.md). Identical-result speed-ups need the oracle check; result-changing ones are arms.
 - **Dense TrackSet:** fine for the 1-min benchmark (about 0.3 GB, estimated), not for long US-wide clips
-  (ADR-0004, proposed).
+  (ADR-0004, accepted).
 - **Hypothesis enumeration and the silence explanation lookup** loop in Python over survivors. This is fine
   regionally; profile before US-wide.
 - **Per-event fit is straight-line.** On curved tracks σ is optimistic; `timing_sys_s` and `w_cov` cover it.
