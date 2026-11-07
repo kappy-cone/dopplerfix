@@ -6,7 +6,7 @@ session logs (sessions 3–6: validation tables, the session-3 decisions, the re
 [docs/history.md](docs/history.md), unchanged. Update this file at the end of each session: replace what
 changed and move what is no longer current into the history.
 
-*Last updated: 2026-11-06 (session 9, laptop). Main at `cb75930`.*
+*Last updated: 2026-11-07 (session 9, laptop). Main at `46b1d05`.*
 
 ## Where things stand
 - **Milestones.** 1–5 are done (on synthetic data). 6 is partly done: exports, the QGIS template, and a Map tab
@@ -41,12 +41,18 @@ changed and move what is no longer current into the history.
   performance history and its rules. [docs/adr/](docs/adr/README.md) holds six ADRs for the open items.
   [reports/test_plan.md](reports/test_plan.md) is the testing strategy (T1–T7). T1, a gate test of the
   per-event pipeline (#21), and T2, golden Stage A2 rows rebuilt and compared after merge (#22), are merged.
-  ADRs 0001–0005 are accepted (#24).
+  ADRs 0001–0005 are accepted (#24). The US-wide benchmark design (milestone 7) is a proposal in
+  [docs/design_uswide_benchmark.md](docs/design_uswide_benchmark.md) (#27), with owner decisions D1–D5.
+- **Two-stage refinement arm V1k** (#26) is merged and registered with its decision rule, before any
+  measurement:
+  - it sets `score.refine_lbfgs_top_k: 50`, so only the best 50 refined cells get L-BFGS-B;
+  - the verdict script is `reports/experiments/two_stage_decision.py`;
+  - its decision run on the compute machine, from clean main, is next.
 
 ## In flight (open PRs)
 | PR | What | Where it runs |
 |---|---|---|
-| #23 | Code-review fixes: missing vertical rate filled from altitude (default, synthetic results unchanged); `cascade.silence_scope` (arm V1s) and `score.refine_order` (arm V1r), off by default | laptop session |
+| #23 | Code-review fixes: missing vertical rate filled from altitude (default, synthetic results unchanged); `cascade.silence_scope` (arm V1s) and `score.refine_order` (arm V1r), off by default. **Conflicts with main since #26** (`config.yaml`, `doppler/score.py`, the registry); needs a rebase. Both change which cells `rank_cells` refines | laptop session |
 | #7 | Old session-7 HANDOFF update; main has since moved past it, and this file replaces it | can be closed |
 
 ## Waiting for the owner
@@ -85,9 +91,9 @@ In the order the docs give:
   - 0002 ruff in the gate and 0001 the run environment in run.json (small);
   - 0004: log the TrackSet's K, T and bytes in run.json;
   - 0005 `run_locate` stage split (T2's golden rows now check it in CI).
-- ADR-0006 (lockstep centre scoring), if accepted: before the two-stage refinement arm.
-- Arms with a registered rule: V1s / V1r, the two-stage refinement arm (NEXT_SESSION of session 8), and the
-  targeted methodology review.
+- The V1k decision run (#26): from clean main on the compute machine, smoke run first.
+- ADR-0006 (lockstep centre scoring), if accepted.
+- Arms once they have a registered rule: V1s / V1r (#23). Also the targeted methodology review.
 - Real data: field recordings (4.5), then P4.3 real-traffic replay and P5.3 UAT coverage.
 
 ## Machines and sessions
@@ -150,6 +156,7 @@ QT_QPA_PLATFORM=offscreen /Applications/QGIS.app/Contents/MacOS/python -s qgis/b
 | Detection work (U19) | [reports/u19.md](reports/u19.md), [docs/u19_detection_literature.md](docs/u19_detection_literature.md) |
 | Performance history and its rules | [CONTEXT.md](CONTEXT.md) |
 | Code health, ADRs, test strategy | [reports/tech_debt_audit.md](reports/tech_debt_audit.md), [docs/adr/](docs/adr/README.md), [reports/test_plan.md](reports/test_plan.md) |
+| US-wide benchmark design (milestone 7) | [docs/design_uswide_benchmark.md](docs/design_uswide_benchmark.md) |
 | Real-data preparation | [docs/field_recordings.md](docs/field_recordings.md), [docs/opensky_ingest.md](docs/opensky_ingest.md), [docs/adsblol_ingest.md](docs/adsblol_ingest.md), [docs/uat_coverage.md](docs/uat_coverage.md), [docs/pyopensky_dependency.md](docs/pyopensky_dependency.md) |
 | Diagnostics | [docs/null_tests.md](docs/null_tests.md), [docs/osm_viewer.md](docs/osm_viewer.md) |
 | Earlier sessions | [docs/history.md](docs/history.md) |
