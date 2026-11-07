@@ -135,6 +135,39 @@ Screens (rule arms out only; neither is a decision run):
    exceed runs gained. Not ruled out is not acceptance: a default change needs its own pre-registered decision
    run.
 
+## Two-stage refinement (session 9; registered before any measurement)
+
+A result-changing speed-up, so an arm (CONTEXT.md rule 2). Approved by the user (session 9): K = 50 and the
+decision rule below. Off by default (`score.refine_lbfgs_top_k: null`), so V0 / V1 are unchanged; the golden
+rows (tests/test_golden_rows.py) and the frozen scoring oracle confirm it.
+
+| Knob (config key) | Value when on | Source | Status | Sensitivity grid | Used by |
+|---|---|---|---|---|---|
+| `score.refine_lbfgs_top_k` | 50 (arm V1k; default null = every refined cell) | 10 % of `refine_max_cells` (500) and 2.5 × `viewer.max_candidates` (20): a margin over the displayed candidates and the 15 % ambiguity tie set. Fixed before measuring, not tuned | a-priori | — | `score.rank_cells` |
+
+Implementation choices (no knob):
+- The `refine_max_cells` cells chosen as now (centre score) all get the 3 × 3 × 13 start grid (`score.refine_start`).
+- The best K of them by (unmatched count, start-grid pooled cost + silence penalty), the score cells are ranked
+  on, also get L-BFGS-B, started from the same grid (`refine_in_cell(start=...)`).
+- The others are scored at their best start-grid point, never worse than the centre.
+
+What can change: only units with more than K refined cells. In the Stage A2 V1 rows that is 249 of 275 units
+(177 hit the 500-cell cap).
+
+**Decision run.** `cli.py ablate --plan stageA --variants V1k --jobs 8` from clean main on the compute machine
+(the Stage A2 machine), all 275 units, paired by unit against the Stage A2 V1 rows
+(`reports/data/stageA2_rows.jsonl.gz`). Smoke run first (CONTRIBUTING §4.1). Measures and verdict:
+`reports/experiments/two_stage_decision.py`, written before the run. **V1k is accepted only if D1, D2 and D3
+all hold:**
+- **D1, rank-1 accuracy does not drop.** Rank-1 accuracy ignoring status (`evaluate.rank1_ok`) over the 275
+  units ≥ A2 V1's 107. Paired gained / lost and the exact sign test are reported.
+- **D2, confident-wrong does not rise.** Units with outcome `confident_wrong` ≤ A2 V1's 17.
+- **D3, it is clearly faster.** On the units with more than K candidates in A2 that finish in both runs, the
+  median per-unit ratio of A2 scoring time to V1k scoring time (`timings_s.score_s`) is ≥ 2.
+- Reported, not gating: timeouts (A2 V1: 3), correct outcomes (62), recall (unchanged by construction:
+  detection is identical), rank-1 error and true-cell rank (Wilcoxon), total wall time.
+- Known cost, as for U19's C3: a timeout flip is wall-clock noise and can move D1 or D2 by a unit.
+
 ## Later phases
 
 These entries are listed in plan P0.7 and are added to config.yaml only when their item is built:

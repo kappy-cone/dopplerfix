@@ -34,6 +34,9 @@ class ScoreParams:
     refine_in_cell: bool = True            # score a cell by its best point within its footprint (sub-cell search)
     refine_max_cells: int = 500            # refine at most this many cells (best by centre score first)
     refine_dt_window_s: float = 3.0        # Δt search half-width around the centre's Δt during refinement
+    refine_lbfgs_top_k: int | None = None  # two-stage refinement (arm): every refined cell gets the 3×3 × 13 start
+                                           # grid; only the best K by start-grid score (+ silence penalty) also get
+                                           # L-BFGS-B. None: every refined cell does (the default)
     silence_weight: float = 1.0            # probabilistic-silence penalty (nats) added to the pooled loss
     ambiguity_rel: float = 0.15            # PROVISIONAL: candidates within this fraction of the best score are "tied"
     ambiguity_radius_m: float = 400.0      # tied candidates all within this of rank 1 -> "unique", else "ambiguous"
@@ -387,7 +390,8 @@ def _fd_points(z: NDArray, eps: float, lb: NDArray, ub: NDArray) -> list[NDArray
 
 def refine_in_cell(hyp: Hypothesis, ridges: list[RidgeObs], ts: TrackSet, xyz: NDArray, half_m: float,
                    start_time_s: float, c: float, p: ScoreParams, init: CellScore,
-                   dt_prior: tuple[float, float] | None = None) -> tuple[CellScore, NDArray, NDArray]:
+                   dt_prior: tuple[float, float] | None = None, *, lbfgs: bool = True,
+                   start: tuple | None = None) -> tuple[CellScore, NDArray, NDArray]:
     """Best score within the cell's square footprint (±half_m east/north, height of the cell's DEM sample).
 
     Joint bounded optimisation of (east, north, Δt) — Δt still shared by every event, f0 profiled per event —
@@ -399,33 +403,18 @@ def refine_in_cell(hyp: Hypothesis, ridges: list[RidgeObs], ts: TrackSet, xyz: N
     (``_fd_points``), which scipy then collects through its ``workers`` hook. The sequence of points, and so
     every result, is the same as evaluating them one at a time (tests/test_score.py checks this against a
     frozen copy of the one-at-a-time version).
+
+    Two-stage refinement (``ScoreParams.refine_lbfgs_top_k``): ``lbfgs=False`` stops after the start grid and
+    scores its best point; ``start`` passes in a start grid already computed by ``refine_start`` (same values).
     """
     from scipy.optimize import minimize
 
-    B = _cell_basis(xyz)
-    n_pts = np.array([len(r.t_s) for r in ridges])
-    total = max(int(n_pts[[k_ >= 0 for k_ in hyp.assignment]].sum()), 1)
-    lo, hi = init.dt_s - p.refine_dt_window_s, init.dt_s + p.refine_dt_window_s
-    if dt_prior is not None:
-        lo, hi = max(lo, dt_prior[0]), min(hi, dt_prior[1])
-
-    def pos(u):
-        return xyz + u[0] * B[0] + u[1] * B[1]
-
-    def costs(us, dts) -> NDArray:
-        """Total cost at each (u, Δt) pair, one call."""
-        xyzs = np.stack([pos(u) for u in us])
-        return _hyp_cost(np.asarray(dts, float), ridges, hyp.assignment, xyzs, ts, start_time_s, c, p.huber_k,
-                         p)[0].sum(0)
-
-    dgrid = np.linspace(lo, hi, 13)
-    grid_u = [np.array([a * half_m, b * half_m]) for a in (-2 / 3, 0.0, 2 / 3) for b in (-2 / 3, 0.0, 2 / 3)]
-    grid_cost = costs([u for u in grid_u for _ in dgrid], np.tile(dgrid, len(grid_u))).reshape(len(grid_u), -1)
-    starts = []
-    for u, cst in zip(grid_u, grid_cost):
-        j = int(np.argmin(cst))
-        starts.append((float(cst[j]), u, float(dgrid[j])))
+    B, n_pts, total, lo, hi, pos, costs = _refine_setup(hyp, ridges, ts, xyz, start_time_s, c, p, init, dt_prior)
+    starts = start if start is not None else _start_grid(costs, lo, hi, half_m)
     _, u0, d0 = min(starts, key=lambda z: z[0])
+    if not lbfgs:
+        return _refined_score(hyp, ridges, ts, pos, np.asarray(u0, float), float(d0), start_time_s, c, p, init,
+                              n_pts, total, xyz)
     scale = np.array([100.0, 100.0, 1.0])               # condition: 100 m ~ 1 s
     x0 = np.array([u0[0], u0[1], d0]) / scale
     bnds = [(-half_m / 100, half_m / 100), (-half_m / 100, half_m / 100), (lo, hi)]
@@ -451,7 +440,56 @@ def refine_in_cell(hyp: Hypothesis, ridges: list[RidgeObs], ts: TrackSet, xyz: N
 
     res = minimize(fun, x0, method="L-BFGS-B", bounds=bnds, options={"eps": eps, "maxiter": 60, "workers": workers})
     z = res.x * scale if res.fun <= min(starts, key=lambda q: q[0])[0] else np.r_[u0, d0]
-    u, dt = z[:2], float(z[2])
+    return _refined_score(hyp, ridges, ts, pos, z[:2], float(z[2]), start_time_s, c, p, init, n_pts, total, xyz)
+
+
+def _refine_setup(hyp, ridges, ts, xyz, start_time_s, c, p, init, dt_prior):
+    """Shared pieces of refine_in_cell / refine_start: cell basis, point counts, Δt window, position and cost."""
+    B = _cell_basis(xyz)
+    n_pts = np.array([len(r.t_s) for r in ridges])
+    total = max(int(n_pts[[k_ >= 0 for k_ in hyp.assignment]].sum()), 1)
+    lo, hi = init.dt_s - p.refine_dt_window_s, init.dt_s + p.refine_dt_window_s
+    if dt_prior is not None:
+        lo, hi = max(lo, dt_prior[0]), min(hi, dt_prior[1])
+
+    def pos(u):
+        return xyz + u[0] * B[0] + u[1] * B[1]
+
+    def costs(us, dts) -> NDArray:
+        """Total cost at each (u, Δt) pair, one call."""
+        xyzs = np.stack([pos(u) for u in us])
+        return _hyp_cost(np.asarray(dts, float), ridges, hyp.assignment, xyzs, ts, start_time_s, c, p.huber_k,
+                         p)[0].sum(0)
+
+    return B, n_pts, total, lo, hi, pos, costs
+
+
+def _start_grid(costs, lo: float, hi: float, half_m: float) -> list[tuple[float, NDArray, float]]:
+    """The 3×3 × 13 start grid in one call: per sub-cell offset, (best total cost, offset, its Δt)."""
+    dgrid = np.linspace(lo, hi, 13)
+    grid_u = [np.array([a * half_m, b * half_m]) for a in (-2 / 3, 0.0, 2 / 3) for b in (-2 / 3, 0.0, 2 / 3)]
+    grid_cost = costs([u for u in grid_u for _ in dgrid], np.tile(dgrid, len(grid_u))).reshape(len(grid_u), -1)
+    starts = []
+    for u, cst in zip(grid_u, grid_cost):
+        j = int(np.argmin(cst))
+        starts.append((float(cst[j]), u, float(dgrid[j])))
+    return starts
+
+
+def refine_start(hyp: Hypothesis, ridges: list[RidgeObs], ts: TrackSet, xyz: NDArray, half_m: float,
+                 start_time_s: float, c: float, p: ScoreParams, init: CellScore,
+                 dt_prior: tuple[float, float] | None = None) -> tuple[float, list]:
+    """Stage 1 of two-stage refinement: the start grid of ``refine_in_cell`` and its best pooled score.
+
+    Returns (pooled cost of the best start point, the start grid to hand to ``refine_in_cell(start=...)``).
+    """
+    _, _, total, lo, hi, _, costs = _refine_setup(hyp, ridges, ts, xyz, start_time_s, c, p, init, dt_prior)
+    starts = _start_grid(costs, lo, hi, half_m)
+    return _pooled(min(z[0] for z in starts), total, p), starts
+
+
+def _refined_score(hyp, ridges, ts, pos, u, dt, start_time_s, c, p, init, n_pts, total, xyz):
+    """CellScore at the refined point (u, Δt); the centre's when that is better (never worse than the centre)."""
     cst, f0, rms, miss = _hyp_cost(np.array([dt]), ridges, hyp.assignment, pos(u), ts, start_time_s, c, p.huber_k,
                                    p)
     sc = CellScore(hyp.cell_id, tuple(hyp.assignment), dt, f0[:, 0], _pooled(cst[:, 0].sum(), total, p),
@@ -509,10 +547,26 @@ def rank_cells(events: Sequence[ObservedEvent], cells: Sequence[tuple], ts: Trac
         out.append(CellResult(cell_id, j, scs[j], scs[j].cost, np.zeros(2), np.asarray(xyz, float), False))
     if p.refine_in_cell:
         hyps_by = {cl[0]: cl[2] for cl in cells}
-        for r in sorted(out, key=lambda r: (r.best.n_unmatched, r.score_centre))[:p.refine_max_cells]:
-            sc, off, xyz_r = refine_in_cell(hyps_by[r.cell_id][r.hyp_index], ridges, ts, r.xyz_est, half_cell_m,
-                                            start_time_s, c, p, r.best, dt_prior)
-            r.best, r.offset_en_m, r.xyz_est, r.refined = sc, off, xyz_r, True
+        chosen = sorted(out, key=lambda r: (r.best.n_unmatched, r.score_centre))[:p.refine_max_cells]
+        K = p.refine_lbfgs_top_k
+        if K is None:
+            for r in chosen:
+                sc, off, xyz_r = refine_in_cell(hyps_by[r.cell_id][r.hyp_index], ridges, ts, r.xyz_est, half_cell_m,
+                                                start_time_s, c, p, r.best, dt_prior)
+                r.best, r.offset_en_m, r.xyz_est, r.refined = sc, off, xyz_r, True
+        else:
+            # Two-stage: the start grid for every chosen cell; L-BFGS-B only for the best K of them by the score
+            # cells are ranked on (start-grid pooled cost + silence penalty, unmatched count first).
+            stage1 = [refine_start(hyps_by[r.cell_id][r.hyp_index], ridges, ts, r.xyz_est, half_cell_m, start_time_s,
+                                   c, p, r.best, dt_prior) for r in chosen]
+            order = sorted(range(len(chosen)), key=lambda i: (chosen[i].best.n_unmatched,
+                                                             stage1[i][0] + pen[chosen[i].cell_id]))
+            full = set(order[:max(int(K), 0)])
+            for i, r in enumerate(chosen):
+                sc, off, xyz_r = refine_in_cell(hyps_by[r.cell_id][r.hyp_index], ridges, ts, r.xyz_est, half_cell_m,
+                                                start_time_s, c, p, r.best, dt_prior, lbfgs=i in full,
+                                                start=stage1[i][1])
+                r.best, r.offset_en_m, r.xyz_est, r.refined = sc, off, xyz_r, True
     for r in out:
         r.best.silence_term = pen[r.cell_id]
         r.best.cost += pen[r.cell_id]
