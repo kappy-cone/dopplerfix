@@ -227,6 +227,9 @@ variants:
   # U19 task 4 screen arm (never a default; apriori_registry "Arm h1g"): V1 with the guarded harmonic hand-off
   V1h1g:
     ridge: {handoff_harmonics: true, handoff_guard: true}
+  # Two-stage refinement arm (never a default until decided; apriori_registry "Two-stage refinement")
+  V1k:
+    score: {refine_lbfgs_top_k: 50}
 
 score:                       # locked N-event scoring: one shared Δt, one f0 per event
   dt_coarse_step_s: 0.5      # coarse Δt grid over each hypothesis' feasible interval, then bounded refinement
@@ -238,6 +241,7 @@ score:                       # locked N-event scoring: one shared Δt, one f0 pe
   refine_in_cell: true       # cell score = best point inside the cell (±half spacing), not its centre
   refine_max_cells: 500      # refine the best N cells by centre score
   refine_dt_window_s: 3.0    # Δt half-width around the centre's Δt while refining
+  refine_lbfgs_top_k: null   # two-stage refinement (arm V1k): start grid for every refined cell, L-BFGS-B only for the best K; null = all
   silence_weight: 1.0        # probabilistic-silence penalty (nats) added to the pooled loss
   ambiguity_rel: 0.15        # PROVISIONAL: candidates within 15% of the best score are tied
   inconsistent_rms_sigma: 3.0  # PROVISIONAL (P0.4; source: 3σ convention): rank-1 rms > this × model-free ridge scatter -> "inconsistent"
