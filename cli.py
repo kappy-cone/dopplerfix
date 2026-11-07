@@ -825,7 +825,9 @@ def run_locate(cfg: dict, inp: LocateInputs, *, fits=None, audio_data=None, sink
                 th = np.array([_true_hyp(row_) for row_ in r.hypotheses.tracks], bool)
                 if th.any():
                     ta_stage = "offset" if ta_stage != "silence" else ta_stage
-                    if r.silence[r.hypotheses.cell[th]].any():
+                    passed = (r.silence[r.hypotheses.cell] if r.hyp_silence_keep is None
+                              else r.hyp_silence_keep)
+                    if (passed & th).any():
                         ta_stage = "silence"
         if M == 0:
             continue
@@ -846,15 +848,15 @@ def run_locate(cfg: dict, inp: LocateInputs, *, fits=None, audio_data=None, sink
         culprits.update(int(k_) for k_ in r.culprit_track)
         for h in np.flatnonzero(r.silence):
             b = r.best[h]
-            hp = r.hypotheses.passes[b]
-            n_h = int((r.hypotheses.cell == h).sum())
+            qs, hyp_pen = r.scoring_hypotheses(h)
+            n_h = len(qs)
             surv.append({
                 "cell_id": int(spec.cell_ids(tile.i[h], tile.j[h])), "i": int(tile.i[h]), "j": int(tile.j[h]),
                 "lat": float(tile.lat[h]), "lon": float(tile.lon[h]), "ground_h_m": float(tile.ground_h_m[h]),
                 "xyz": tile.xyz[h].copy(), "interim_cost": float(cost[h]), "dt_s": float(r.dt_s[h]),
                 "dt_lo_s": float(r.hypotheses.dt_lo_s[b]), "dt_hi_s": float(r.hypotheses.dt_hi_s[b]),
                 "tracks": [int(k_) for k_ in r.hypotheses.tracks[b]], "n_hypotheses": n_h,
-                "n_audible": int(r.n_audible[h]), "sil_pen": float(r.silence_penalty[h]),
+                "n_audible": int(r.n_audible[h]), "sil_pen": float(r.silence_penalty[h]), "hyp_pen": hyp_pen,
                 "hyps": [(cascade.Hypothesis(int(spec.cell_ids(tile.i[h], tile.j[h])),
                                              tuple(int(k_) for k_ in r.hypotheses.tracks[q_]),
                                              (float(r.hypotheses.dt_lo_s[q_]), float(r.hypotheses.dt_hi_s[q_]))),
@@ -862,7 +864,7 @@ def run_locate(cfg: dict, inp: LocateInputs, *, fits=None, audio_data=None, sink
                            {"t_emit_s": float(r.passes.t_emit_s[q]), "r_m": float(r.passes.r_cpa_m[q]),
                             "speed_mps": float(r.passes.speed_mps[q]), "pos": r.passes.pos[q].copy()}
                            for q in r.hypotheses.passes[q_]])
-                         for q_ in np.flatnonzero(r.hypotheses.cell == h)],
+                         for q_ in qs],
             })
     timings.update({f"cascade_{k}_s": v for k, v in stage_s.items()})
     grid_exact = True
@@ -876,7 +878,7 @@ def run_locate(cfg: dict, inp: LocateInputs, *, fits=None, audio_data=None, sink
     t = _time.perf_counter()
     sp = score.ScoreParams.from_dict(section(cfg, "score"))
     by_id = {d["cell_id"]: d for d in surv}
-    ranked = score.rank_cells(events, [(d["cell_id"], d["xyz"], [h for h, _ in d["hyps"]], d["sil_pen"])
+    ranked = score.rank_cells(events, [(d["cell_id"], d["xyz"], [h for h, _ in d["hyps"]], d["hyp_pen"])
                                        for d in surv], ts,
                               prior.start_s, c, sp, (prior.dt_lo_s, prior.dt_hi_s), 0.5 * spec.spacing_m)
     n_scored = sum(len(d["hyps"]) for d in surv)

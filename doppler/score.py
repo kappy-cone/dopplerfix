@@ -34,6 +34,9 @@ class ScoreParams:
     refine_in_cell: bool = True            # score a cell by its best point within its footprint (sub-cell search)
     refine_max_cells: int = 500            # refine at most this many cells (best by centre score first)
     refine_dt_window_s: float = 3.0        # Δt search half-width around the centre's Δt during refinement
+    refine_order: str = "centre"           # which cells get the refine_max_cells refinements: centre (centre score) |
+                                           # centre_silence (centre score + silence penalty, the score they are
+                                           # ranked by; arm, apriori_registry "Refine order")
     silence_weight: float = 1.0            # probabilistic-silence penalty (nats) added to the pooled loss
     ambiguity_rel: float = 0.15            # PROVISIONAL: candidates within this fraction of the best score are "tied"
     ambiguity_radius_m: float = 400.0      # tied candidates all within this of rank 1 -> "unique", else "ambiguous"
@@ -495,21 +498,39 @@ def rank_cells(events: Sequence[ObservedEvent], cells: Sequence[tuple], ts: Trac
     ``refine_max_cells`` cells within their footprint, and return cells sorted by final score.
 
     ``cells``: (cell_id, xyz, hypotheses[, silence_penalty_nats]). The penalty (probabilistic silence) is
-    added to the pooled loss as silence_weight · nats / total ridge points.
+    added to the pooled loss as silence_weight · nats / total ridge points. It is one float per cell
+    (``cascade.silence_scope: cell``), or one per hypothesis (``hypothesis``); then each cell's best hypothesis
+    is chosen with its own penalty included.
     """
+    if p.refine_order not in ("centre", "centre_silence"):
+        raise ValueError(f"refine_order must be centre or centre_silence, not {p.refine_order!r}")
     ridges = prepare_ridges(events, p)
     total = max(int(sum(len(r.t_s) for r in ridges)), 1)
     # probabilistic-silence penalty: per point under the Huber loss (a mean), in nats under the calibrated one
     per = 1.0 if p.likelihood == "calibrated" else total
-    pen = {cl[0]: (float(cl[3]) if len(cl) > 3 else 0.0) * p.silence_weight / per for cl in cells}
-    out = []
-    for cell_id, xyz, hyps, *_ in cells:
+
+    def scaled(x):
+        return x * p.silence_weight / per
+
+    out, pen = [], {}
+    for cell_id, xyz, hyps, *rest in cells:
+        raw = rest[0] if rest else 0.0
         scs = [score_hypothesis(h, ridges, ts, xyz, start_time_s, c, p, dt_prior) for h in hyps]
-        j = min(range(len(scs)), key=lambda i: scs[i].rank_key)
+        if np.ndim(raw) == 0:                  # one penalty per cell: it cannot change the cell's best hypothesis
+            j = min(range(len(scs)), key=lambda i: scs[i].rank_key)
+            pen[cell_id] = scaled(float(raw))
+        else:                                  # per hypothesis: choose with each hypothesis' own penalty
+            ph_ = [scaled(float(x)) for x in raw]
+            j = min(range(len(scs)), key=lambda i: (scs[i].n_unmatched, scs[i].cost + ph_[i]))
+            pen[cell_id] = ph_[j]
         out.append(CellResult(cell_id, j, scs[j], scs[j].cost, np.zeros(2), np.asarray(xyz, float), False))
     if p.refine_in_cell:
         hyps_by = {cl[0]: cl[2] for cl in cells}
-        for r in sorted(out, key=lambda r: (r.best.n_unmatched, r.score_centre))[:p.refine_max_cells]:
+        if p.refine_order == "centre":
+            order = sorted(out, key=lambda r: (r.best.n_unmatched, r.score_centre))
+        else:                                  # by the score cells are finally ranked on (penalty included)
+            order = sorted(out, key=lambda r: (r.best.n_unmatched, r.score_centre + pen[r.cell_id]))
+        for r in order[:p.refine_max_cells]:
             sc, off, xyz_r = refine_in_cell(hyps_by[r.cell_id][r.hyp_index], ridges, ts, r.xyz_est, half_cell_m,
                                             start_time_s, c, p, r.best, dt_prior)
             r.best, r.offset_en_m, r.xyz_est, r.refined = sc, off, xyz_r, True

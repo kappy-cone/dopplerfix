@@ -246,6 +246,19 @@ def normalize_frame(df: pd.DataFrame, aliases: dict | None = None) -> pd.DataFra
     return df
 
 
+def vertical_rate_filled(t_s: NDArray, alt_m: NDArray, vrate_mps: NDArray) -> NDArray:
+    """Reported vertical rate, with missing fixes filled from the altitude derivative (not 0).
+
+    Feeds often omit the vertical rate on some fixes. Treating those as level flight puts the whole climb
+    rate into the radial-velocity error: 10 m/s near an overhead CPA is about 3 % of the Doppler shift.
+    """
+    vz = np.asarray(vrate_mps, float).copy()
+    miss = ~np.isfinite(vz)
+    if miss.any():
+        vz[miss] = np.gradient(alt_m, t_s)[miss] if len(t_s) > 1 else 0.0
+    return vz
+
+
 def tracks_from_frame(df: pd.DataFrame, params: TrackParams = TrackParams(), aliases: dict | None = None) -> list[Track]:
     """Group fixes by aircraft (raw, uncleaned). Picks the altitude source per aircraft."""
     df = normalize_frame(df, aliases)
@@ -263,7 +276,8 @@ def tracks_from_frame(df: pd.DataFrame, params: TrackParams = TrackParams(), ali
         vel = None
         if g["ground_speed_mps"].notna().all() and g["track_deg"].notna().all():
             vel = velocity_enu_from_adsb(g["ground_speed_mps"].to_numpy(float), g["track_deg"].to_numpy(float),
-                                         g["vertical_rate_mps"].to_numpy(float))
+                                         vertical_rate_filled(g["t_s"].to_numpy(float), alt.to_numpy(float),
+                                                              g["vertical_rate_mps"].to_numpy(float)))
         cs = g["callsign"][g["callsign"] != ""]
         out.append(Track(
             icao24=str(icao), callsign=str(cs.iloc[0]) if len(cs) else "", t_s=g["t_s"].to_numpy(float),

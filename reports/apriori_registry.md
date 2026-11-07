@@ -135,6 +135,32 @@ Screens (rule arms out only; neither is a decision run):
    exceed runs gained. Not ruled out is not acceptance: a default change needs its own pre-registered decision
    run.
 
+## Code-review arms (session 9; registered before any measurement)
+
+Two defects found by the session 9 code review of `doppler/`. The fixes change results, so they are arms: off
+by default, V0 and V1 rows unchanged. Neither has been measured.
+
+| Knob (config key) | Value when on | Source | Status | Sensitivity grid | Used by |
+|---|---|---|---|---|---|
+| `cascade.silence_scope` | `hypothesis` (arm V1s; default `cell`) | methodology (CLAUDE.md step 6): an audible pass is explained only by the assignment being scored. Default `cell` explains it by any CPA-consistent pass of the cell, at the cell's best-hypothesis Δt, so a second aircraft at an event's time is excused | mode | — | `cascade.iter_cascade` (`_silence_per_hypothesis`), `score.rank_cells` (per-hypothesis penalty) |
+| `score.refine_order` | `centre_silence` (arm V1r; default `centre`) | consistency: cells are ranked on centre score + silence penalty, so the `refine_max_cells` refinements should go to the best cells on that score. Default `centre` picks them before the penalty is added | mode | — | `score.rank_cells` |
+
+Variants: V1s (silence per hypothesis), V1r (refine order), V1sr (both). Implementation choices (no knob):
+- With `hypothesis` scope each hypothesis is tested at its own Δt midpoint, as a point at its cell's position,
+  explained only by its own passes.
+- A cell survives if any of its hypotheses does. Its reported best hypothesis, Δt, counts and penalty are those
+  of the lowest-penalty surviving hypothesis (ties by cascade cost).
+- Scoring sees only the surviving hypotheses, each with its own penalty, and chooses the cell's best with that
+  penalty included.
+
+Expected effects, stated before measuring:
+- V1s: fewer survivors where two class-compatible aircraft pass at an event's time; slower silence stage (one
+  test per hypothesis, at most `max_hypotheses_per_cell` + `max_partial_per_cell` per cell).
+- V1r: changes results only on units with more than `refine_max_cells` (500) surviving cells.
+
+No screen or decision rule is set yet. The owner sets one before the first measurement, against the Stage A2
+reference rows.
+
 ## Later phases
 
 These entries are listed in plan P0.7 and are added to config.yaml only when their item is built:

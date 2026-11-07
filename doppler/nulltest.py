@@ -116,11 +116,12 @@ def search(spec: GridSpec, events: Sequence[ObservedEvent], ts: TrackSet, prior:
         counts["silence"] += int(r.silence.sum())
         for h in np.flatnonzero(r.silence):
             cid = int(spec.cell_ids(tile.i[h], tile.j[h]))
+            qs, pen = r.scoring_hypotheses(h)
             hyps = [Hypothesis(cid, tuple(int(k) for k in r.hypotheses.tracks[q]),
                                (float(r.hypotheses.dt_lo_s[q]), float(r.hypotheses.dt_hi_s[q])))
-                    for q in np.flatnonzero(r.hypotheses.cell == h)]
+                    for q in qs]
             interim = float(r.hypotheses.cost[r.best[h]])
-            cells.append((interim, (cid, tile.xyz[h].copy(), hyps, float(r.silence_penalty[h]))))
+            cells.append((interim, (cid, tile.xyz[h].copy(), hyps, pen)))
     cells.sort(key=lambda x: x[0])              # stable, like run_locate's interim ranking
     out = SearchBest(n_events=len(events), n_candidates=len(cells), survivors=counts)
     if not cells:
