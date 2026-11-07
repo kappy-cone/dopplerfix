@@ -76,7 +76,7 @@ harness (planning, row building, paired tests) to `doppler/ablation.py`, keeping
 `rank_cells` scores every hypothesis of every cell with `score_hypothesis` in a Python loop, then refines the
 top cells with per-cell L-BFGS-B. #15 batched the refinement's cost evaluations (about 1.8× faster), but the
 centre-scoring loop is still per hypothesis, and scoring dominates the wall clock of ablation runs (Stage A
-took about 1 h 40 min at `--jobs 8`). CLAUDE.md says to flag this before reaching for numba or
+took about 69 min at `--jobs 8` for the 275 V0 / V1 units, Stage A2 about 53 min). CLAUDE.md says to flag this before reaching for numba or
 multiprocessing.
 **Fix:** profile first (½ day, `cProfile` on one Stage A unit). Then batch the centre scoring across
 hypotheses that share a cell (same ridges, stacked track rows), as #15 did for refinement, and check it
@@ -155,8 +155,9 @@ session running on the compute machine, which owns `config.yaml`, `fit.py`, `rid
 - Done: item 1 (transcript moved to `data/doppler.txt`; one report notes it), item 2 (`cli.need`, 25 call
   sites, AST test; `config.yaml` unchanged, so `config_sha256` is unchanged), item 5 (CLAUDE.md layout only),
   item 10 (`tests/test_experiments_import.py`), item 11 (`cascade.refine_cpa`), item 12 (comment).
-- Deferred until the U19 branch merges: item 2's two `plot.py` keys (`viewer.event_time_px` and
-  `event_freq_px` are not in `config.yaml`), and item 5's HANDOFF rewrite (that session will rewrite HANDOFF
+- Done after the U19 branch merged (#17): item 2's two `plot.py` keys (`viewer.event_time_px` and
+  `event_freq_px`, now in `config.yaml`; this moves `config_sha256`, as #17's new keys already did).
+- Still deferred: item 5's HANDOFF rewrite (that session will rewrite HANDOFF
   at its end).
 - Waiting for your decision: item 6 (the lock should come from the compute machine's venv, which produced the
   reference rows), item 9 (ruff is a new dependency), item 13 (the pyarrow switch).

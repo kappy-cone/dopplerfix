@@ -275,6 +275,8 @@ viewer:
   plotly_sha256: 6d21266ce1bd7d9e5ab4e115989c70c20de0382fd973a8f26ab58619eba4d603
   max_time_px: 1500          # display-only downsampling of the spectrogram
   max_freq_px: 400
+  event_time_px: 1000         # per-event spectrogram window in the viewer (display only)
+  event_freq_px: 300
   max_candidates: 20
   map_style: open-street-map # Map tab basemap (plotly scattermap style); tiles need a network connection
   map_max_cells: 20000       # scored cells drawn on the Map tab (best first; display only)

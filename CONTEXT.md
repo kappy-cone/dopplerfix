@@ -59,11 +59,8 @@ bottleneck there.
 7. **Config changes move `config_sha256`.** Adding keys to `config.yaml` is allowed, but it changes the hash
    that rows record. Do it in a PR of its own, and say so in the PR.
 
-## Concurrent work (as of 2026-11-06)
-The U19 task 4 screen (arm h / h1g, branch `s8-u19-handoff`) is running on the compute machine. Its commits
-touch `config.yaml`, `doppler/fit.py`, `doppler/ridge.py`, `tests/test_fit.py`, `reports/u19.md`,
-`reports/apriori_registry.md` and `reports/experiments/u19/`. Its session will probably also rewrite
-`HANDOFF.md` / `NEXT_SESSION.md` at the end.
-
-Code-health branches stay out of those files until it merges. In particular, they don't edit `config.yaml`,
-so the screen's config hash and the next merge stay clean. Nothing here pushes to main.
+## Concurrent work
+None as of 2026-11-06. The U19 task 4 work (arm h / h1g) merged in #17. Its screens ruled neither arm out, and
+both stay off by default (`reports/u19.md`, task 4 steps 2 and 3). #17 added keys to `config.yaml`, so rows made
+after it record a new `config_sha256` and `detection_sha256` with unchanged results (rule 7). Two-stage refinement
+is on hold, pending the order of it and the identical-result centre-scoring speed-up (audit item 4).
