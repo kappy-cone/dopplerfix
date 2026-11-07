@@ -24,17 +24,16 @@ are handled differently (below).
 | Session 6 (#1, #3) | CI: sharded gate, xdist, package cache, `heavy` marker, slow suite after merge | Gate about 30 s (was 3.5 min) | `.github/workflows/tests.yml`, CONTRIBUTING §7 |
 | Session 8 (#15, f809b80) | Batched refinement: the 3×3×13 start grid in one call; each L-BFGS-B point costed with its 3 finite-difference points via scipy's `workers` hook; packed (T−1, 12) gather in `TrackSet._sample_one` | Bit-identical (frozen oracle `tests/_scoring_oracle.py`, 10 ablation rows, Stage A2 cross-check 100/100). `rank_cells` 40.5 → 22.2 s on a refinement-heavy scenario; **only 1.16–1.29× on hypothesis-heavy units (19–34 k hypotheses), where centre scoring dominates and was untouched** | PR #15 |
 | Session 8 (#16) | Stage A2 full pass | 275 units in about 53 min vs Stage A's 69 min | `reports/stageA.md` §A2 |
+| Session 9 (#26, #29) | Two-stage refinement arm V1k (K = 50), result-changing | Rejected: accuracy identical, but median scoring speed-up 1.57× < 2× (refinement is no longer most of scoring) | `reports/two_stage.md` |
+| Session 9 (ADR-0006) | Lockstep centre scoring: Brent as a generator, one `modeled_ratio` per (event, track) per step for all of a cell's hypotheses | Bit-identical (frozen `score_hypothesis` oracle, 13 rebuilt Stage A2 units × {V0, V1}). Centre scoring 2.65–2.83× faster on the 70–77 k-hypothesis units; **the three Stage A2 timeouts finish in 402–558 s**; 1.1–1.6× on mid-size units | ADR-0006 |
 
-Where the time goes now: on the units that time out, it is **centre scoring of every hypothesis** (a coarse
-Δt grid plus a Brent `minimize_scalar` per hypothesis). Refinement was the target of #15 and is no longer the
-bottleneck there.
+Where the time goes now: centre scoring is still the larger part on hypothesis-heavy units, now in lockstep
+(ADR-0006); no Stage A2 unit hits the 900 s cap any more. Re-profile before the next speed change.
 
 ## Options already identified but not done
-- **Lockstep Δt refinement (identical-result).** Refine all of a cell's hypotheses together, so each event and
-  track is interpolated once per step for all of them. Proposed in session 5. It needs the same bit-for-bit
-  check as #15, and it is the main lever left for the timeouts. (Audit item 4.)
-- **Two-stage refinement (result-changing).** Run full L-BFGS-B only for the top K cells by start-grid score.
-  NEXT_SESSION lists it as a registered arm, with K fixed in advance, decided against the Stage A2 rows.
+- **Lockstep Δt refinement:** done (ADR-0006). A further identical-result step would group (event, track)
+  calls across cells (`modeled_ratio` already takes one position per row); not measured.
+- **Two-stage refinement:** decided and rejected (reports/two_stage.md).
 - **Top-K hypotheses per cell, or a lower hypothesis cap (result-changing).** These stay measured arms
   (stageA.md step 1b).
 - **Ragged `TrackSet` (memory, US-wide).** A known pitfall in CLAUDE.md that nothing has addressed yet. The

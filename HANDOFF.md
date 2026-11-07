@@ -6,7 +6,7 @@ session logs (sessions 3–6: validation tables, the session-3 decisions, the re
 [docs/history.md](docs/history.md), unchanged. Update this file at the end of each session: replace what
 changed and move what is no longer current into the history.
 
-*Last updated: 2026-11-06 (session 9, laptop). Main at `cb75930`.*
+*Last updated: 2026-11-07 (session 9, compute machine). Main at `0f094d8` plus this PR.*
 
 ## Where things stand
 - **Milestones.** 1–5 are done (on synthetic data). 6 is partly done: exports, the QGIS template, and a Map tab
@@ -41,30 +41,36 @@ changed and move what is no longer current into the history.
   performance history and its rules. [docs/adr/](docs/adr/README.md) holds six ADRs for the open items.
   [reports/test_plan.md](reports/test_plan.md) is the testing strategy (T1–T7). T1, a gate test of the
   per-event pipeline (#21), and T2, golden Stage A2 rows rebuilt and compared after merge (#22), are merged.
-  ADRs 0001–0005 are accepted (#24).
+  ADRs 0001–0005 are accepted (#24); ADR-0006 is accepted (2026-11-07) and built in this PR.
+  The US-wide benchmark design (milestone 7) is a proposal in
+  [docs/design_uswide_benchmark.md](docs/design_uswide_benchmark.md) (#27), with owner decisions D1–D5.
+- **Speed (session 9).**
+  - Two-stage refinement (arm V1k, K = 50) was decided and **rejected** (#29,
+    [reports/two_stage.md](reports/two_stage.md)): accuracy identical, median scoring speed-up 1.57× < 2×.
+  - Lockstep centre scoring (ADR-0006) is identical-result and the default: 2.65–2.83× on the heaviest
+    units, and **the three Stage A2 timeouts now finish**. Stage A2's rows stay the reference; only those
+    three units' timeout statuses would differ on a rerun.
 
 ## In flight (open PRs)
 | PR | What | Where it runs |
 |---|---|---|
-| #23 | Code-review fixes: missing vertical rate filled from altitude (default, synthetic results unchanged); `cascade.silence_scope` (arm V1s) and `score.refine_order` (arm V1r), off by default | laptop session |
+| #23 | Code-review fixes: missing vertical rate filled from altitude (default, synthetic results unchanged); `cascade.silence_scope` (arm V1s) and `score.refine_order` (arm V1r), off by default. Conflicts with #26 and ADR-0006 in `score.rank_cells`; review comment open (vertical-rate fill order) | laptop session |
 | #7 | Old session-7 HANDOFF update; main has since moved past it, and this file replaces it | can be closed |
 
 ## Waiting for the owner
 Each item is the owner's call; sessions don't decide them.
-1. **ADR-0006** (lockstep centre scoring; [docs/adr/](docs/adr/README.md)) is still Proposed. 0001–0005 were
-   accepted on 2026-11-06.
-2. **Code-review arms V1s / V1r (#23):** set a screen and decision rule before the first measurement.
+1. **Code-review arms V1s / V1r (#23):** set a screen and decision rule before the first measurement.
    V1s is the plan's **R2 "per-hypothesis silence"** (plan §8.4 screens it on scene, levels and adsb, plus
    all-on and clean).
-3. **U19 arm h1g:** whether to run a decision run (see above).
-4. **Plan re-ordering:** discrimination is 50 % of V1 all-on failures in Stage A2, above the §3.0 40 % line.
+2. **U19 arm h1g:** whether to run a decision run (see above).
+3. **Plan re-ordering:** discrimination is 50 % of V1 all-on failures in Stage A2, above the §3.0 40 % line.
    The rule was written for Stage A, so whether it applies is the owner's call (stageA.md §A2 reading).
-5. **Config items:**
+4. **Config items:**
    - `aircraft_types.type_table_path: data/doc8643_types.csv`, for real tracks only;
    - whether to add `tracks.drop_onground` (a config key and a TrackParams field together).
-6. **Wind tolerance:** `cascade.wind_sys_mps` 15 m/s is much larger than the physics needs (about v·w/c ≈
+5. **Wind tolerance:** `cascade.wind_sys_mps` 15 m/s is much larger than the physics needs (about v·w/c ≈
    2 m/s; CLAUDE.md Known pitfalls). Tightening it is open, and it stays PROVISIONAL until 4.5.
-7. **Session-3 defaults never formally approved** (details in docs/history.md):
+6. **Session-3 defaults never formally approved** (details in docs/history.md):
    - `max_unmatched_events: 1` with lexicographic ranking;
    - probabilistic silence;
    - `gof_widening`;
@@ -74,7 +80,7 @@ Each item is the owner's call; sessions don't decide them.
 
    CLAUDE.md steps 5–6 still describe the original (V0) design; update them only after the V0/V1 comparison
    settles it.
-8. **Process:** CONTRIBUTING §1 says squash-merge. #9–#15 were squash-merged, but #16–#20 were merged with
+7. **Process:** CONTRIBUTING §1 says squash-merge. #9–#15 were squash-merged, but #16–#20 were merged with
    merge commits. Either the rule or the practice should change.
 
 ## Next work (candidates; each needs the owner's OK)
@@ -85,9 +91,7 @@ In the order the docs give:
   - 0002 ruff in the gate and 0001 the run environment in run.json (small);
   - 0004: log the TrackSet's K, T and bytes in run.json;
   - 0005 `run_locate` stage split (T2's golden rows now check it in CI).
-- ADR-0006 (lockstep centre scoring), if accepted: before the two-stage refinement arm.
-- Arms with a registered rule: V1s / V1r, the two-stage refinement arm (NEXT_SESSION of session 8), and the
-  targeted methodology review.
+- Arms with a registered rule: V1s / V1r, and the targeted methodology review.
 - Real data: field recordings (4.5), then P4.3 real-traffic replay and P5.3 UAT coverage.
 
 ## Machines and sessions
@@ -121,7 +125,7 @@ QT_QPA_PLATFORM=offscreen /Applications/QGIS.app/Contents/MacOS/python -s qgis/b
 
 ## Fragile / watch
 - **Timeouts are outcomes.** The 900 s per-run cap means scoring speed changes results on heavy units
-  (CONTEXT.md). Identical-result speed-ups need the oracle check; result-changing ones are arms.
+  (CONTEXT.md). Since ADR-0006 no Stage A2 unit reaches it, but the heaviest take up to about 560 s. Identical-result speed-ups need the oracle check; result-changing ones are arms.
 - **Dense TrackSet:** fine for the 1-min benchmark (about 0.3 GB, estimated), not for long US-wide clips
   (ADR-0004, accepted).
 - **Hypothesis enumeration and the silence explanation lookup** loop in Python over survivors. This is fine
@@ -147,9 +151,11 @@ QT_QPA_PLATFORM=offscreen /Applications/QGIS.app/Contents/MacOS/python -s qgis/b
 | Branches, reviews, smoke runs, CI policy | [CONTRIBUTING.md](CONTRIBUTING.md) |
 | Every knob's source and status | [reports/apriori_registry.md](reports/apriori_registry.md) |
 | Baselines: Stage A, U18, Stage A2 | [reports/stageA.md](reports/stageA.md), rows in `reports/data/` |
+| Two-stage refinement decision (rejected) | [reports/two_stage.md](reports/two_stage.md) |
 | Detection work (U19) | [reports/u19.md](reports/u19.md), [docs/u19_detection_literature.md](docs/u19_detection_literature.md) |
 | Performance history and its rules | [CONTEXT.md](CONTEXT.md) |
 | Code health, ADRs, test strategy | [reports/tech_debt_audit.md](reports/tech_debt_audit.md), [docs/adr/](docs/adr/README.md), [reports/test_plan.md](reports/test_plan.md) |
+| US-wide benchmark design (milestone 7) | [docs/design_uswide_benchmark.md](docs/design_uswide_benchmark.md) |
 | Real-data preparation | [docs/field_recordings.md](docs/field_recordings.md), [docs/opensky_ingest.md](docs/opensky_ingest.md), [docs/adsblol_ingest.md](docs/adsblol_ingest.md), [docs/uat_coverage.md](docs/uat_coverage.md), [docs/pyopensky_dependency.md](docs/pyopensky_dependency.md) |
 | Diagnostics | [docs/null_tests.md](docs/null_tests.md), [docs/osm_viewer.md](docs/osm_viewer.md) |
 | Earlier sessions | [docs/history.md](docs/history.md) |

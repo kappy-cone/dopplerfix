@@ -1,8 +1,8 @@
 # ADR-0006: Centre scoring in lockstep per cell, grouped by (event, track), with identical results
 
-**Status:** Proposed (2026-11-06; awaiting the project owner's decision)
+**Status:** Accepted (2026-11-07, by the project owner)
 **Date:** 2026-11-06
-**Deciders:** project owner (not yet decided)
+**Deciders:** project owner
 **Audit item:** 4 (CONTEXT.md, "Options already identified but not done")
 
 ## Context
@@ -88,14 +88,35 @@ split, `cli.py`) or ADR-0004 (no TrackSet layout change).
   exception in cross-checks). Rerun a reference only if you want timeouts on the new code.
 
 ## Action items
-1. [ ] Re-profile on current main: the four session-5 units (all-on 11, 23, 18, loo:source 6) and the V1
-   units that time out in Stage A2 (loo:geometry 18, sub:cwind 11, sub:mic_height 18; all-on 11 and 23 no
-   longer time out there). The baseline, plus hypotheses per cell and distinct tracks per event.
-   Profile with nothing else running (CONTEXT.md rule 3).
-2. [ ] `score._bounded_brent` generator; test that its probes equal scipy's on 200 random bounded problems.
-3. [ ] `score.score_cell_lockstep` (coarse grid → Brent steps → final), used by `rank_cells` behind no flag
-   (identical results).
-4. [ ] Oracle test: every `CellScore` field identical to `score_hypothesis` on the cascade survivors of a
-   clean scenario and of one all-on unit; 10 rebuilt Stage A2 units identical except timing and provenance.
-   The golden-row test (reports/test_plan.md T2) must be in the gate's after-merge job first, and green here.
-5. [ ] Re-profile; report the speed-up per unit in the PR.
+Done in session 9 (branch `s9-adr0006-lockstep`), on the compute machine with nothing else running.
+1. [x] Baseline: the Stage A2 V1 rows' `score_s` (same machine, same default scoring path; #26 left it
+   unchanged). The three Stage A2 timeouts have no baseline below the 900 s cap.
+2. [x] `score._bounded_brent`: probes and result equal scipy's on 200 random bounded problems (smooth,
+   multimodal and plateaued objectives), and at `maxiter` (`tests/test_score_lockstep.py`).
+3. [x] `score.score_cell_lockstep`, used by `rank_cells` with no flag. The calibrated likelihood (arm V1c / V0c)
+   keeps the one-at-a-time path: `_event_nll`'s robust scale branches on the whole batch, so stacking
+   hypotheses could change its results.
+4. [x] Oracle checks, all exact:
+   - `score_cell_lockstep` against the frozen `score_hypothesis` (`tests/_scoring_oracle.py`) on every
+     `CellScore` field and type: 12 hypotheses with unmatched events, shared tracks, an empty ridge, degenerate
+     and out-of-prior Δt bounds, with and without a prior;
+   - the heavy `rank_cells` oracle test on a clean scenario's survivors;
+   - the three golden Stage A2 units (T2), exact with the geoid grids;
+   - 10 more rebuilt Stage A2 units × {V0, V1} (the most hypothesis-heavy unit of each of 10 configs) and the
+     4 heavy units that finish: every result field equal to the Stage A2 rows (24 rows, 0 differences).
+5. [x] Speed (`score_s`, rebuilt at 8 parallel workers as in an ablation, against Stage A2):
+
+   | unit (V1) | hypotheses scored | Stage A2 score_s | lockstep score_s | speed-up |
+   |---|---|---|---|---|
+   | all-on 11 | 76,819 | 699 | 247 | 2.83× |
+   | all-on 18 | 69,752 | 646 | 244 | 2.65× |
+   | loo:geometry 18 | | timeout (900 s cap) | 407 (run 439 s) | > 2× |
+   | sub:cwind 11 | | timeout | 542 (run 558 s) | > 1.6× |
+   | sub:mic_height 18 | | timeout | 367 (run 402 s) | > 2.2× |
+   | 10 identity units (14–29 k hypotheses) | | 92–132 | 69–101 | 1.12–1.54× (median 1.29×) |
+   | all-on 23, loo:source 6 (2–3 k), run alone | | 22.0, 17.2 | 20.3, 14.8 | 1.08×, 1.16× |
+
+   The gain grows with hypotheses per cell, as expected. **All three Stage A2 timeouts now finish** (as
+   abstentions), so V1 rows on these units change from `timeout` to a result: the documented exception.
+   Unit loo:source 6 measured 0.59× in the 8-worker batch beside the heavy units, but 1.16× alone, so that
+   reading was load, not the code.
